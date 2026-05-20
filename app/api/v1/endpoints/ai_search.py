@@ -12,14 +12,10 @@ from app.services.ai_service import AIService
 router = APIRouter()
 
 
-def get_ai_service() -> AIService:
-    return AIService()
-
-
 @router.post("/search", response_model=SearchResponse)
 def search_vectors(
     request: SearchRequest,
-    ai_service: AIService = Depends(get_ai_service),
+    ai_service: AIService = Depends(deps.get_ai_service),
     current_user: dict = Depends(deps.get_current_user)
 ) -> Any:
     """
@@ -32,7 +28,7 @@ def search_vectors(
 @router.post("/generate", response_model=GenerateResponse)
 def generate_response(
     request: GenerateRequest,
-    ai_service: AIService = Depends(get_ai_service),
+    ai_service: AIService = Depends(deps.get_ai_service),
     current_user: dict = Depends(deps.get_current_user)
 ) -> Any:
     """
