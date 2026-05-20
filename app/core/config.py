@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Sentry Config
     SENTRY_DSN: Optional[str] = None
 
+    # Google Gemini Config
+    GEMINI_API_KEY: Optional[str] = None
+    
     # CORS Config
     BACKEND_CORS_ORIGINS: List[str] = ["*"]
 

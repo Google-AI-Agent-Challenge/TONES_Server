@@ -1,20 +1,23 @@
+import uuid
 from fastapi.testclient import TestClient
 from app.core.config import settings
 
 
 def test_signup(client: TestClient):
+    random_email = f"user_{uuid.uuid4().hex[:8]}@example.com"
     response = client.post(
         f"{settings.API_V1_STR}/auth/signup",
         json={
-            "email": "newuser@example.com",
+            "email": random_email,
             "password": "securepassword",
             "full_name": "New User"
         }
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["email"] == "newuser@example.com"
+    assert data["email"] == random_email
     assert "id" in data
+
 
 
 def test_login_access_token(client: TestClient):
