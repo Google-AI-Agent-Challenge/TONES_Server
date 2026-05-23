@@ -1,49 +1,78 @@
 [Development Context]
-- Core Web/API: Python + FastAPI + Pydantic (기본 내장)
-- Async WAS: Uvicorn
-- Data Layer: Supabase (RDBMS) + Pinecone (Vector)
-- DevOps/Infra: Docker + Railway
-- Quality/Stability: Sentry (에러 추적) + Pytest (테스트)
-- Security: Pydantic + Bandit + GitHub Dependabot
-- CI/CD: GitHub Actions
+- Core Web/API: Python + FastAPI + Pydantic (v2.6+)
+- Async WAS: Uvicorn (standard)
+- Data Layer: Supabase (RDBMS, supabase-py SDK) + Pinecone (Vector Database)
+- AI & LLM Integration: Google Gemini API (text-embedding-004, gemini-2.0-flash / gemini-1.5-flash)
+- DevOps/Infra: Docker + Railway (Dockerfile 제공)
+- Quality/Stability: Sentry (에러 추적, sentry-sdk) + Pytest (테스트 프레임워크)
+- Security & Auth: JWT (python-jose) + Password Hashing (passlib[bcrypt], bcrypt) + Pydantic (데이터 검증) + Bandit / GitHub Dependabot (보안 진단)
+- CI/CD: GitHub Actions (main.yml)
 
-[Layered Architecture]
-my_fastapi_app/
+[Actual Folder Structure]
+WooYeonChoiYeonWoo_Server/
+│
+├── .github/                 # GitHub 설정 및 CI/CD 워크플로우
+│   ├── workflows/
+│   │   └── main.yml         # GitHub Actions 워크플로우 설정 파일
+│   └── pull_request_template.md # PR 템플릿 마크다운 파일
 │
 ├── app/                     # 애플리케이션 핵심 소스코드
-│   ├── api/                 # API 엔드포인트 (라우터) 레이어
+│   ├── api/                 # API 엔드포인트 및 의존성 레이어
 │   │   ├── v1/
 │   │   │   ├── endpoints/
-│   │   │   │   ├── auth.py
-│   │   │   │   ├── users.py
-│   │   │   │   └── ai_search.py
-│   │   │   └── api.py       # v1 라우터들을 하나로 통합하는 파일
-│   │   └── deps.py          # 공통 의존성 (Supabase 클라이언트, 인증 등)
+│   │   │   │   ├── auth.py      # 사용자 인증 (로그인, 토큰 발급) 엔드포인트
+│   │   │   │   ├── users.py     # 사용자 정보 관리 엔드포인트
+│   │   │   │   ├── ai_search.py # AI 시맨틱 검색 및 질의응답 엔드포인트
+│   │   │   │   └── dashboard.py # 대시보드 데이터 조회 엔드포인트 [실제 추가됨]
+│   │   │   └── api.py       # v1 라우터 통합 파일 (auth, users, ai, dashboard)
+│   │   └── deps.py          # 공통 의존성 (Supabase & Pinecone 클라이언트 초기화, 인증 종속성)
 │   │
-│   ├── core/                # 프로젝트 전역 설정 및 보안
-│   │   ├── config.py        # 내부 환경변수 관리 (pydantic-settings)
-│   │   └── security.py      # JWT 토큰 발행, 비밀번호 암호화 등
+│   ├── core/                # 프로젝트 전역 설정 및 보안 핵심
+│   │   ├── config.py        # Pydantic-settings 기반 환경변수 관리 (.env 매핑)
+│   │   └── security.py      # JWT 토큰 발행, 비밀번호 해싱 및 검증
 │   │
-│   ├── models/              # DB 테이블 및 엔티티 레이어 (필요 시)
+│   ├── models/              # DB 데이터 정의 레이어
+│   │   └── schema.sql       # 데이터베이스 테이블 스키마 정의 SQL [실제 추가됨]
 │   │
-│   ├── schemas/             # Pydantic 데이터 검증 레이어 (DTO)
-│   │   ├── auth.py
-│   │   ├── user.py
-│   │   └── ai_search.py
+│   ├── schemas/             # Pydantic 데이터 검증 및 DTO(Data Transfer Object) 레이어
+│   │   ├── auth.py          # 인증 요청/응답 검증 스키마
+│   │   ├── user.py          # 사용자 데이터 검증 스키마
+│   │   ├── ai_search.py     # AI 검색 및 질문 생성 스키마
+│   │   └── dashboard.py     # 대시보드 데이터 표현 스키마 [실제 추가됨]
 │   │
-│   ├── services/            # 비즈니스 로직 레이어 (핵심 기능 처리)
-│   │   ├── user_service.py
-│   │   └── ai_service.py    # Pinecone 검색 및 LLM 연동 로직
+│   ├── services/            # 비즈니스 로직 레이어 (핵심 비즈니스 흐름 처리)
+│   │   ├── user_service.py  # 사용자 관련 DB CRUD 로직
+│   │   ├── ai_service.py    # Pinecone 벡터 검색 및 Google Gemini LLM API 연동 로직
+│   │   └── dashboard_service.py # 대시보드 메트릭 연산 및 통계 처리 로직 [실제 추가됨]
 │   │
-│   └── main.py              # FastAPI 앱 생성 및 초기화 (진입점)
+│   └── main.py              # FastAPI 앱 생성, CORS 설정, Sentry 및 라우터 초기화 (진입점)
 │
-├── tests/                   # Pytest 테스트 코드 폴더
-│   ├── conftest.py          # 테스트 공통 설정 및 피스처(Fixture)
-│   ├── test_auth.py
-│   └── test_ai.py
+├── supabase/                # Supabase DB 초기화 스크립트
+│   ├── products.sql         # 상품 관련 테이블 구조 정의 SQL [실제 추가됨]
+│   └── seed.sql             # DB 초기 테스트 데이터 삽입 스크립트 [실제 추가됨]
 │
-├── .env                     # 환경 변수 파일 (Supabase URL, API KEY 등)
-├── .gitignore
-├── Dockerfile
-├── README.md
-└── requirements.txt
+├── tests/                   # Pytest 기반 테스트 코드 폴더
+│   ├── conftest.py          # 테스트 공통 설정 및 Fixture 정의 파일
+│   ├── test_auth.py         # 인증 API 테스트 코드
+│   └── test_ai.py           # AI 검색 및 답변 생성 API 테스트 코드
+│
+├── .env                     # 로컬 환경변수 설정 파일 (실제 구동 시 필요)
+├── .env.example             # 환경변수 템플릿 양식 파일
+├── .gitignore               # Git 관리 제외 파일 목록
+├── Dockerfile               # 컨테이너 배포를 위한 도커 빌드 스펙 파일
+├── README.md                # 프로젝트 안내 문서
+└── requirements.txt         # 백엔드 의존성 패키지 명세서 (FastAPI, Pytest, Supabase, Pinecone 등)
+
+[Analysis of Discrepancies (Planned vs. Actual)]
+1. 실제 추가된 비즈니스 도메인 (Dashboard):
+   - 기획 단계의 'backend_framework_decision_making.txt'에는 없었으나, 실제 구현에서는 대시보드 기능이 핵심으로 포함되었습니다. 이에 따라 `api/v1/endpoints/dashboard.py`, `schemas/dashboard.py`, `services/dashboard_service.py`가 추가되어 대시보드 메트릭 및 통계를 담당하고 있습니다.
+2. 데이터베이스 스키마 및 초기화 관리:
+   - 기획에서는 `models/` 폴더를 빈 상태로 두었으나, 실제 개발에서는 `app/models/schema.sql`을 작성하여 데이터베이스 스키마를 명시적으로 문서화했습니다.
+   - 프로젝트 루트에 `supabase/` 디렉터리가 추가되어 데이터베이스 초기화를 위한 `products.sql`과 대량의 테스트용 데이터를 구축하기 위한 `seed.sql` 파일이 구현되었습니다.
+3. AI 핵심 기술 스택 구체화:
+   - 기획에서는 "Pinecone 검색 및 LLM 연동" 정도로 추상적으로 명시되어 있었으나, 실제 구현에서는 Google Gemini API가 적극적으로 차용되었습니다.
+   - 텍스트 임베딩 모델로는 `text-embedding-004`를 활용하여 쿼리를 벡터화하고 이를 Pinecone에 검색을 수행합니다.
+   - 답변 생성 모델로는 최신 `gemini-2.0-flash` 모델을 메인으로 사용하고, 해당 API에 문제가 있을 시 `gemini-1.5-flash` 모델로 자동 폴백하는 구조가 구현되어 있어 높은 안정성을 갖추고 있습니다.
+4. 보안 패키지 및 인프라 구체화:
+   - JWT 검증을 위해 `python-jose`, 비밀번호 보안 강화를 위해 `passlib[bcrypt]`/`bcrypt`가 도입되어 로그인 및 인가 처리가 실제 구현되었습니다.
+   - GitHub Actions CI/CD 파일(`main.yml`)과 PR 템플릿(`pull_request_template.md`)이 갖춰져 실제 협업 체계가 구축되어 있습니다.
