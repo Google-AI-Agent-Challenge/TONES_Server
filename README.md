@@ -1,6 +1,7 @@
-# TONES
+# 💄 TONES
 
 > **우연최연우** 팀과 함께하는 H&B 입점 뷰티 브랜드를 위한 AI 대화형 리뷰 관제 솔루션
+
 
 ## 배포 링크
 
@@ -87,7 +88,7 @@ WooYeonChoiYeonWoo_Server/
 └── requirements.txt                # 파이썬 패키지 의존성 정의
 ```
 
-### 💻 시스템 아키텍처 흐름 (Workflow)
+### ⚙️ 시스템 아키텍처 흐름 (Workflow)
 <img src="./asset/시스템%20아키텍처.png" width="500" height="700"/>
 
 ## 사용 방법
