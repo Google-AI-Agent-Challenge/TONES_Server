@@ -22,7 +22,7 @@ B2B 특화 AI 리뷰 감성 분석 대시보드입니다.
 “수분감은 좋지만 트러블이 발생했다”와 같은 양가감정 리뷰까지 분석할 수 있도록  
 화장품 도메인 특화 감성 분석 구조를 적용했습니다.
 
-## TONES Server
+## 🖥️ TONES Server
 
 본 백엔드 서버는 **FastAPI**를 핵심 프레임워크로 채택하여 높은 동시성과 빠른 응답 속도를 자랑하며, 다음과 같은 핵심 비즈니스 로직을 처리합니다.
 
@@ -32,7 +32,7 @@ B2B 특화 AI 리뷰 감성 분석 대시보드입니다.
 
 - **보안 및 인증**: bcrypt 패스워드 해싱 및 무상태(Stateless) JWT 기반 인증 아키텍처를 도입하여 안전한 API 접근 제어를 보장합니다.
 
-## ⌨️ 기술 스택
+## 🛠️ 기술 스택
 
 ### 1. Core Framework & Web
 * **Python 3.11+**
@@ -57,7 +57,7 @@ B2B 특화 AI 리뷰 감성 분석 대시보드입니다.
 * **Pytest 8.0.0+**: 단위 및 통합 테스트 자동화 스위트
 * **HTTPX Client**: 비동기 비차단 API 통합 테스트 지원
 
-## ⚙️ 시스템 아키텍쳐
+## 🏗️ 시스템 아키텍쳐
 
 ### 디렉토리 구조 (Layered Folder Architecture)
 ```text
@@ -99,21 +99,19 @@ WooYeonChoiYeonWoo_Server/
 └── requirements.txt                # 파이썬 패키지 의존성 정의
 ```
 
-### ⚙️ 아키텍처 흐름 (Workflow)
+### ⚙️ 시스템 아키텍처 흐름 (Workflow)
 <img src="./asset/시스템%20아키텍처.png" width="500" height="700"/>
 
 ## 사용 방법
 
-### git clone 실행
+### 1. git clone 실행
 ```shell
 $ git clone https://github.com/Google-AI-Agent-Challenge/TONES_Server.git
 ```
 
-### 👇 시스템 설정
-
-#### 1. 환경 변수 파일(`.env`) 추가
-- 루트 디렉토리에 `.env` 파일을 추가해주세요. (`.env.example` 파일을 복사하여 사용할 수 있습니다.)
-- **Supabase**, **Pinecone**, **Google Gemini** 및 **Sentry** 연동 설정이 필요합니다.
+### 2. 시스템 설정
+ 설정
+ **Pinecone**, **Google Gemini** 및 **Sentry** 연동 설정이 필요합니다.
 
 ```env
 # App Config
@@ -139,7 +137,7 @@ SENTRY_DSN=""
 GEMINI_API_KEY="your-gemini-api-key"
 ```
 
-#### 2. 패키지 설치 및 실행
+### 3. 패키지 설치 및 실행
 - 가상환경을 구성하고 필요한 의존성을 설치한 뒤, 로컬 Uvicorn 서버를 실행합니다.
 
 ```shell
@@ -154,13 +152,23 @@ $ pip install -r requirements.txt
 $ uvicorn app.main:app --reload
 ```
 
-#### 3. Supabase 초기화 및 스키마 설정
+### 4. Supabase 초기화 및 스키마 설정
 - `supabase` 디렉토리에 작성된 SQL 스크립트를 사용하여 DB 테이블 및 기초 데이터를 적재합니다.
   - `supabase/products.sql` 파일을 실행하여 스키마를 구성합니다.
   - `supabase/seed.sql` 파일을 실행하여 테스트용 대량 리뷰/제품 시드 데이터를 로드합니다.
 
-#### 4. 테스트 수행
+### 5. 테스트 수행
 - pytest를 통해 비즈니스 로직과 API 가동 상태를 자동으로 검증할 수 있습니다.
 ```shell
 $ pytest
+```
+
+### 6. Docker Compose를 이용한 배포
+
+```shell
+# Start the server
+$ docker compose up --build -d
+
+# Stop the server
+$ docker compose down
 ```
