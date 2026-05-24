@@ -3,11 +3,11 @@
 > **우연최연우** 팀과 함께하는 H&B 입점 뷰티 브랜드를 위한 AI 대화형 리뷰 관제 솔루션
 
 
-## 배포 링크
+## 🎥 배포 링크
 
 > [👉 구경하러 가기~!](https://frontend-eight-orcin-70.vercel.app/)
 
-## 프로젝트 소개
+## 📖 프로젝트 소개
 
 하루 수만 건씩 쌓이는 고객 리뷰,  
 아직도 실무자가 직접 읽고 계신가요?
@@ -32,7 +32,7 @@ B2B 특화 AI 리뷰 감성 분석 대시보드입니다.
 
 - **보안 및 인증**: bcrypt 패스워드 해싱 및 무상태(Stateless) JWT 기반 인증 아키텍처를 도입하여 안전한 API 접근 제어를 보장합니다.
 
-## 기술 스택
+## ⌨️ 기술 스택
 
 ### 1. Core Framework & Web
 * **Python 3.11+**
@@ -57,7 +57,7 @@ B2B 특화 AI 리뷰 감성 분석 대시보드입니다.
 * **Pytest 8.0.0+**: 단위 및 통합 테스트 자동화 스위트
 * **HTTPX Client**: 비동기 비차단 API 통합 테스트 지원
 
-## 시스템 아키텍쳐
+## ⚙️ 시스템 아키텍쳐
 
 ### 디렉토리 구조 (Layered Folder Architecture)
 ```text
@@ -99,7 +99,7 @@ WooYeonChoiYeonWoo_Server/
 └── requirements.txt                # 파이썬 패키지 의존성 정의
 ```
 
-### ⚙️ 시스템 아키텍처 흐름 (Workflow)
+### ⚙️ 아키텍처 흐름 (Workflow)
 <img src="./asset/시스템%20아키텍처.png" width="500" height="700"/>
 
 ## 사용 방법
@@ -109,7 +109,7 @@ WooYeonChoiYeonWoo_Server/
 $ git clone https://github.com/Google-AI-Agent-Challenge/TONES_Server.git
 ```
 
-### 시스템 설정
+### 👇 시스템 설정
 
 #### 1. 환경 변수 파일(`.env`) 추가
 - 루트 디렉토리에 `.env` 파일을 추가해주세요. (`.env.example` 파일을 복사하여 사용할 수 있습니다.)
