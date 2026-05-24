@@ -110,8 +110,7 @@ $ git clone https://github.com/Google-AI-Agent-Challenge/TONES_Server.git
 ```
 
 ### 2. 시스템 설정
- 설정
- **Pinecone**, **Google Gemini** 및 **Sentry** 연동 설정이 필요합니다.
+- **Pinecone**, **Google Gemini** 및 **Sentry** 연동 설정이 필요합니다.
 
 ```env
 # App Config
