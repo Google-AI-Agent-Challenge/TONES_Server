@@ -2,6 +2,8 @@ import uuid
 from typing import List, Optional
 from datetime import datetime, timedelta
 from supabase import Client
+from app.schemas.dashboard import ReviewCreate
+from app.services.ai_service import AIService
 
 # 오프라인 상태 또는 DB 미연동 시 제공할 고품질의 화장품 패드 분석 목업 데이터
 MOCK_PRODUCTS = [
@@ -194,3 +196,135 @@ class DashboardService:
         # Local mock filter
         filtered = [r for r in MOCK_REVIEWS if r["product_id"] == product_id]
         return filtered[:limit] if filtered else MOCK_REVIEWS[:limit]
+
+    async def process_and_save_reviews(self, reviews: List[ReviewCreate], ai_service: AIService) -> dict:
+        """
+        크롤링 리뷰 AI 분석 파이프라인 통합 적재 트랜잭션 메서드
+        1. 원시 리뷰에 대해 ABSA 엔진 구동
+        2. Pinecone 벡터 임베딩 생성 및 upsert
+        3. Supabase DB 적재 (자가 치유 및 롤백 정책 적용)
+        """
+        success_count = 0
+        failure_count = 0
+        processed_ids = []
+
+        for review in reviews:
+            # 1. 고유 ID 생성 (UUID 검증 포함)
+            try:
+                review_id_val = str(uuid.UUID(review.review_id)) if review.review_id else str(uuid.uuid4())
+            except Exception:
+                review_id_val = str(uuid.uuid5(uuid.NAMESPACE_URL, str(review.review_id)))
+
+            row_uuid = str(uuid.uuid4())
+
+            try:
+                # 2. Gemini ABSA 엔진 실행
+                absa_res = ai_service.analyze_review_absa(review.content)
+
+                # 3. Pinecone 벡터 DB 적재용 메타데이터 빌드 및 업로드
+                metadata = {
+                    "product_id": review.product_id,
+                    "source": review.source,
+                    "rating": review.rating,
+                    "review_date": review.review_date or datetime.now().date().isoformat(),
+                    "sentiment": absa_res["overall_sentiment"],
+                    "issue_type": absa_res["issue_type"],
+                    "ai_summary": absa_res["ai_summary"]
+                }
+                
+                # Pinecone upsert 수행
+                upsert_ok = ai_service.upsert_review_vector(row_uuid, review.content, metadata)
+                if not upsert_ok:
+                    print(f"[DashboardService] Pinecone 벡터 적재 오류 발생 (건너뜀 또는 에러 처리): {row_uuid}")
+
+                # 4. Supabase DB 적재 레코드 빌드
+                supabase_record = {
+                    "id": row_uuid,
+                    "product_id": review.product_id,
+                    "source": review.source,
+                    "reviewer_type": review.skin_type or review.reviewer_type,
+                    "review_text": review.content,
+                    "rating": review.rating,
+                    "review_date": review.review_date or datetime.now().date().isoformat(),
+                    "sentiment": absa_res["overall_sentiment"],
+                    "sentiment_score": absa_res["overall_score"],
+                    "keywords": absa_res["keywords"],
+                    "issue_type": absa_res["issue_type"],
+                    "ai_summary": absa_res["ai_summary"],
+                    "review_id": review_id_val,
+                    "score_ingredients": absa_res["ingredients_skin_concerns_score"],
+                    "score_formulation": absa_res["formulation_spreadability_score"],
+                    "score_container": absa_res["container_design_score"]
+                }
+
+                # 5. Supabase 트랜잭션 수행 (자가 치유 및 롤백 패턴 적용)
+                if self.supabase is not None:
+                    try:
+                        # [시도 1] 개별 컬럼(score_ingredients 등)을 포함하여 인서트 시도
+                        self.supabase.table("reviews").insert(supabase_record).execute()
+                        print(f"[DashboardService] Supabase 적재 성공 (개별 컬럼 포함): {row_uuid}")
+                    except Exception as e:
+                        # [시도 2] 자가 치유(Self-Healing) 작동: 컬럼 누락 시 구조화 패키징
+                        error_str = str(e)
+                        if "column" in error_str or "does not exist" in error_str or "404" in error_str:
+                            print(f"[DashboardService] 개별 감성 점수 컬럼 누락 감지, 자가 치유(Self-Healing) 실행: {e}")
+                            scores_formatted = (
+                                f"[성분/고민]: {absa_res['ingredients_skin_concerns_score']:.2f} | "
+                                f"[제형/발림]: {absa_res['formulation_spreadability_score']:.2f} | "
+                                f"[용기/디자인]: {absa_res['container_design_score']:.2f}"
+                            )
+                            healed_record = supabase_record.copy()
+                            healed_record["ai_summary"] = f"{scores_formatted} \n요약: {absa_res['ai_summary']}"
+                            
+                            # 오류 방지용 속성 점수 필드들 제외
+                            healed_record.pop("score_ingredients", None)
+                            healed_record.pop("score_formulation", None)
+                            healed_record.pop("score_container", None)
+                            
+                            try:
+                                self.supabase.table("reviews").insert(healed_record).execute()
+                                print(f"[DashboardService] 자가 치유된 레코드 Supabase 적재 성공: {row_uuid}")
+                            except Exception as final_err:
+                                print(f"[DashboardService] 자가 치유 후 최종 DB 적재 실패로 Pinecone 롤백 실행: {final_err}")
+                                ai_service.delete_review_vector(row_uuid)
+                                raise final_err
+                        else:
+                            print(f"[DashboardService] Supabase 기타 DB 오류 발생으로 Pinecone 롤백 실행: {e}")
+                            ai_service.delete_review_vector(row_uuid)
+                            raise e
+                else:
+                    # 오프라인 및 로컬 테스트 환경 시뮬레이션
+                    print(f"[DashboardService] Supabase 미설정 상태, 가상 메모리 적재 처리: {row_uuid}")
+                    mock_record = {
+                        "id": row_uuid,
+                        "product_id": review.product_id,
+                        "source": review.source,
+                        "reviewer_type": review.skin_type or review.reviewer_type or "일반",
+                        "review_text": review.content,
+                        "rating": review.rating,
+                        "review_date": review.review_date or datetime.now().date().isoformat(),
+                        "sentiment": absa_res["overall_sentiment"],
+                        "sentiment_score": absa_res["overall_score"],
+                        "keywords": absa_res["keywords"],
+                        "issue_type": absa_res["issue_type"],
+                        "ai_summary": f"[성분/고민]: {absa_res['ingredients_skin_concerns_score']:.2f} | [제형/발림]: {absa_res['formulation_spreadability_score']:.2f} | [용기/디자인]: {absa_res['container_design_score']:.2f} \n요약: {absa_res['ai_summary']}",
+                        "review_id": review_id_val,
+                        "created_at": datetime.now().isoformat()
+                    }
+                    MOCK_REVIEWS.append(mock_record)
+
+                success_count += 1
+                processed_ids.append(row_uuid)
+
+            except Exception as e:
+                print(f"[DashboardService] 리뷰 처리 중 예외 발생 (건너뜀 및 실패 카운트 증가): {e}")
+                failure_count += 1
+
+        return {
+            "status": "completed",
+            "total_reviews": len(reviews),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "processed_ids": processed_ids
+        }
+

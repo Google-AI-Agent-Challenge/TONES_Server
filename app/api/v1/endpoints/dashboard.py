@@ -1,8 +1,9 @@
 from typing import List
 from fastapi import APIRouter, Depends, Query
 from app.api import deps
-from app.schemas.dashboard import ProductSchema, ReviewSchema
+from app.schemas.dashboard import ProductSchema, ReviewSchema, ReviewCreate
 from app.services.dashboard_service import DashboardService
+from app.services.ai_service import AIService
 
 router = APIRouter()
 
@@ -57,3 +58,15 @@ def get_reviews_by_product(
     특정 제품 리뷰 상세 목록 조회 API
     """
     return dashboard_service.fetch_reviews_by_product(product_id, limit)
+
+@router.post("/reviews/bulk", status_code=201)
+async def bulk_upload_reviews(
+    reviews: List[ReviewCreate],
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    ai_service: AIService = Depends(deps.get_ai_service)
+):
+    """
+    크롤링된 리뷰 대량 업로드 및 AI 파이프라인 처리 API (인증 미적용)
+    """
+    result = await dashboard_service.process_and_save_reviews(reviews, ai_service)
+    return result

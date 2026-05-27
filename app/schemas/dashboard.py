@@ -33,3 +33,18 @@ class ReviewSchema(BaseModel):
     model_config = {
         "from_attributes": True
     }
+
+class ReviewCreate(BaseModel):
+    product_id: str
+    content: str
+    rating: int
+    skin_type: Optional[str] = None
+    reviewer_type: Optional[str] = None
+    source: str = "올리브영"
+    review_date: Optional[str] = None
+    review_id: Optional[str] = None
+
+    model_config = {
+        "from_attributes": True
+    }
+
