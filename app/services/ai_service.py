@@ -340,3 +340,113 @@ class AIService:
             "ai_summary": summary
         }
 
+    def generate_trend_briefing(self, this_week: dict, last_week: dict, product_name: str) -> str:
+        """
+        Gemini 2.0-flash를 호출하여 수치 변화에 따른 대시보드 탑 1줄 요약 브리핑 생성
+        네트워크 오류나 API 미설정 시 로컬 한글 요약 생성 엔진으로 자동 폴백
+        """
+        t_attr = this_week["attribute_scores"]
+        l_attr = last_week["attribute_scores"]
+        
+        # 1. 주간 비교 변동 폭 산출
+        ing_diff = t_attr["ingredients"] - l_attr["ingredients"]
+        form_diff = t_attr["formulation"] - l_attr["formulation"]
+        cont_diff = t_attr["container"] - l_attr["container"]
+        rating_diff = this_week["average_rating"] - last_week["average_rating"]
+        
+        # 2. API 미설정 시 로컬 룰 엔진 즉시 기동
+        if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY.startswith("your-"):
+            print("[AIService] Gemini API Key 미설정 (로컬 트렌드 브리핑 엔진 구동)")
+            return self._local_trend_briefing_fallback(ing_diff, form_diff, cont_diff, rating_diff, product_name)
+
+        # 3. Gemini RAG-style 브리핑 전용 프롬프트 조립
+        system_instruction = (
+            "당신은 뷰티 이커머스 대시보드 전문 수석 분석가입니다. 주어진 화장품 제품의 '이번 주' 통계 및 '지난 주' 통계 데이터를 기반으로,\n"
+            "고객 만족도 흐름을 분석하여 대시보드 최상단 배너에 노출될 **친절하고 정교한 한국어 1문장 실시간 요약 브리핑 (약 20~40단어)**을 생성해 주세요.\n\n"
+            "작성 규칙:\n"
+            "1. 수치 변동 폭(예: 성분/자극 만족도 상승 또는 용기 결함 불만 급증 등)을 반드시 강조해야 합니다.\n"
+            "2. 친근하지만 전문성 있는 어조를 사용하고, 반드시 한국어 1문장으로만 완성해 주세요. 마크다운 기호(별표 등)는 사용하지 마세요.\n"
+            "3. 절대 서론이나 설명 없이 브리핑 문장 하나만 바로 리턴하세요."
+        )
+        
+        prompt = (
+            f"대상 제품명: {product_name}\n\n"
+            f"[이번 주 통계]\n"
+            f"- 총 리뷰 수: {this_week['total_reviews']}개\n"
+            f"- 평균 평점: {this_week['average_rating']}점 / 5.0\n"
+            f"- 성분/고민 진정 만족도: {t_attr['ingredients']:.4f}\n"
+            f"- 제형/발림성 만족도: {t_attr['formulation']:.4f}\n"
+            f"- 용기/편의성 만족도: {t_attr['container']:.4f}\n\n"
+            f"[지난 주 대비 변동 폭 (WoW)]\n"
+            f"- 평점 변화: {rating_diff:+.2f}점\n"
+            f"- 성분/고민 변동: {ing_diff:+.4f}\n"
+            f"- 제형/발림성 변동: {form_diff:+.4f}\n"
+            f"- 용기/편의성 변동: {cont_diff:+.4f}"
+        )
+
+        # Gemini 2.0 Flash -> 1.5 Flash 폴백 처리
+        models = ["gemini-2.0-flash", "gemini-1.5-flash"]
+        for model_name in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
+            payload = {
+                "contents": [{
+                    "parts": [{"text": f"{system_instruction}\n\n{prompt}"}]
+                }]
+            }
+            try:
+                with httpx.Client(timeout=15.0) as client:
+                    response = client.post(url, json=payload)
+                    if response.status_code == 200:
+                        data = response.json()
+                        briefing = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        if briefing:
+                            print(f"[AIService] Gemini 트렌드 브리핑 요약 생성 완료 ({model_name})")
+                            return briefing
+                    else:
+                        print(f"[AIService] Gemini Briefing API 에러 ({model_name}): {response.status_code}")
+            except Exception as e:
+                print(f"[AIService] Gemini Briefing API 예외 발생 ({model_name}): {e}")
+
+        # 최종 로컬 폴백
+        print("[AIService] Gemini API 오류로 인해 로컬 트렌드 브리핑 엔진 폴백 구동")
+        return self._local_trend_briefing_fallback(ing_diff, form_diff, cont_diff, rating_diff, product_name)
+
+    def _local_trend_briefing_fallback(self, ing_diff: float, form_diff: float, cont_diff: float, rating_diff: float, product_name: str) -> str:
+        """
+        오프라인 및 API 키 미설정용 로컬 규칙 기반 한글 트렌드 요약 브리핑 생성
+        """
+        issues = []
+        improvements = []
+        
+        # 1. 속성별 변화 판별
+        if ing_diff <= -0.10:
+            issues.append(f"성분 및 피부 고민에 대한 부정 VOC가 {abs(ing_diff)*100:.1f}% 증가")
+        elif ing_diff >= 0.10:
+            improvements.append(f"성분 순함 및 진정 만족도 수치가 {ing_diff*100:.1f}% 개선")
+            
+        if form_diff <= -0.10:
+            issues.append(f"제형의 끈적임 및 화장 밀림에 대한 아쉬움 의견이 {abs(form_diff)*100:.1f}% 상승")
+        elif form_diff >= 0.10:
+            improvements.append(f"촉촉하고 산뜻한 발림성 만족도가 {form_diff*100:.1f}% 증가")
+            
+        if cont_diff <= -0.10:
+            issues.append(f"용기 불량, 뚜껑 헛돌기 및 집게 분실 불만이 {abs(cont_diff)*100:.1f}% 급증")
+        elif cont_diff >= 0.10:
+            improvements.append(f"용기 편의성 및 위생적 디자인 점수가 {cont_diff*100:.1f}% 상승")
+
+        # 2. 종합 코멘트 조립
+        if issues:
+            detail_issue = ", ".join(issues)
+            return f"🚨 최근 1주일간 {product_name} 제품은 {detail_issue}하여 제품 개선 및 민감 피드백 조율이 요구됩니다."
+        elif improvements:
+            detail_impr = ", ".join(improvements)
+            return f"✨ 최근 1주일간 {product_name} 제품은 {detail_impr}하며 전반적으로 우수한 긍정 트렌드를 유지하고 있습니다."
+        else:
+            rating_comment = "안정적인 흐름"
+            if rating_diff > 0:
+                rating_comment = "미세한 평점 상승 추세"
+            elif rating_diff < 0:
+                rating_comment = "일시적인 미세 평점 하락"
+            return f"ℹ️ 최근 1주일간 {product_name} 제품의 통계 분석 결과, 평점이 {rating_comment}를 보이며 3대 핵심 속성 모두 균형 잡힌 만족도를 나타내고 있습니다."
+
+

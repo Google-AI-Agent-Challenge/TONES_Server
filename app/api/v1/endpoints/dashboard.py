@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
 from app.api import deps
 from app.schemas.dashboard import ProductSchema, ReviewSchema, ReviewCreate
@@ -35,12 +35,9 @@ def search_reviews_by_keywords(
     """
     키워드 기반 리뷰 필터링/검색 API
     """
-    # FastAPI Query alias can bind list params like ?keywords=트러블&keywords=자극
-    # Or comma separated strings. Handle both.
     final_keywords = []
     if keywords:
         for kw in keywords:
-            # Handle comma separation within a query parameter (e.g. ?keywords=트러블,자극)
             if "," in kw:
                 final_keywords.extend([k.strip() for k in kw.split(",") if k.strip()])
             else:
@@ -69,4 +66,17 @@ async def bulk_upload_reviews(
     크롤링된 리뷰 대량 업로드 및 AI 파이프라인 처리 API (인증 미적용)
     """
     result = await dashboard_service.process_and_save_reviews(reviews, ai_service)
+    return result
+
+@router.get("/statistics")
+async def get_dashboard_statistics(
+    product_id: Optional[str] = Query(None, description="특정 제품 필터 ID (미지정 시 전체 상품 합산)"),
+    period: int = Query(7, description="조회할 기간 범위 (일 수, 기본 7일)"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    ai_service: AIService = Depends(deps.get_ai_service)
+):
+    """
+    대시보드 통계 서빙 및 캐싱 조회 API (Recharts 연동용 차트 데이터 및 AI 트렌드 브리핑 리턴)
+    """
+    result = await dashboard_service.get_dashboard_statistics(product_id, period, ai_service)
     return result
