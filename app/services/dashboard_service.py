@@ -1,4 +1,5 @@
 import uuid
+import re
 from typing import List, Optional
 from datetime import datetime, timedelta
 from supabase import Client
@@ -132,6 +133,7 @@ MOCK_REVIEWS = [
 class DashboardService:
     def __init__(self, supabase_client: Client | None):
         self.supabase = supabase_client
+        self._stats_cache = {}  # TTL 캐시 보관소: {(product_id, period_days): (timestamp, stats_data)}
 
     def fetch_products(self) -> List[dict]:
         if self.supabase is not None:
@@ -327,4 +329,211 @@ class DashboardService:
             "failure_count": failure_count,
             "processed_ids": processed_ids
         }
+
+    def _extract_scores_from_summary(self, ai_summary: str) -> dict:
+        """
+        ai_summary 문자열에서 정규표현식을 이용하여 [성분/고민], [제형/발림], [용기/디자인] 점수를 파싱 및 복원
+        """
+        scores = {
+            "ingredients_skin_concerns_score": 0.5,
+            "formulation_spreadability_score": 0.5,
+            "container_design_score": 0.5
+        }
+        if not ai_summary:
+            return scores
+
+        try:
+            m_ing = re.search(r"\[성분/고민\]:\s*([0-9.]+)", ai_summary)
+            m_form = re.search(r"\[제형/발림\]:\s*([0-9.]+)", ai_summary)
+            m_cont = re.search(r"\[용기/디자인\]:\s*([0-9.]+)", ai_summary)
+
+            if m_ing:
+                scores["ingredients_skin_concerns_score"] = float(m_ing.group(1))
+            if m_form:
+                scores["formulation_spreadability_score"] = float(m_form.group(1))
+            if m_cont:
+                scores["container_design_score"] = float(m_cont.group(1))
+        except Exception as e:
+            print(f"[DashboardService] 감성 점수 파싱 중 오류 (기본값 사용): {e}")
+
+        return scores
+
+    def _aggregate_reviews(self, reviews: list[dict]) -> dict:
+        """
+        개별 리뷰 목록에 대한 통계 애그리게이션 계산 (자가 치유 파싱 지원)
+        """
+        total = len(reviews)
+        if total == 0:
+            return {
+                "total_reviews": 0,
+                "average_rating": 0.0,
+                "sentiment_breakdown": {"positive": 0, "neutral": 0, "negative": 0},
+                "attribute_scores": {
+                    "ingredients": 0.5,
+                    "formulation": 0.5,
+                    "container": 0.5
+                }
+            }
+
+        ratings_sum = 0
+        sentiment_counts = {"positive": 0, "neutral": 0, "negative": 0}
+        
+        sum_ing = 0.0
+        sum_form = 0.0
+        sum_cont = 0.0
+
+        for r in reviews:
+            ratings_sum += r.get("rating", 0)
+            
+            # 감성 카운팅
+            sent = r.get("sentiment")
+            if sent in sentiment_counts:
+                sentiment_counts[sent] += 1
+            else:
+                sentiment_counts["neutral"] += 1
+
+            # 속성별 점수 추출 (컬럼 우선, 없을 경우 ai_summary 정규식 파싱)
+            ing_val = r.get("score_ingredients")
+            form_val = r.get("score_formulation")
+            cont_val = r.get("score_container")
+
+            if ing_val is not None and form_val is not None and cont_val is not None:
+                sum_ing += float(ing_val)
+                sum_form += float(form_val)
+                sum_cont += float(cont_val)
+            else:
+                parsed = self._extract_scores_from_summary(r.get("ai_summary", ""))
+                sum_ing += parsed["ingredients_skin_concerns_score"]
+                sum_form += parsed["formulation_spreadability_score"]
+                sum_cont += parsed["container_design_score"]
+
+        return {
+            "total_reviews": total,
+            "average_rating": round(ratings_sum / total, 2),
+            "sentiment_breakdown": sentiment_counts,
+            "attribute_scores": {
+                "ingredients": round(sum_ing / total, 4),
+                "formulation": round(sum_form / total, 4),
+                "container": round(sum_cont / total, 4)
+            }
+        }
+
+    def _get_mock_reviews_split(self, product_id: str | None, period_days: int) -> tuple[list[dict], list[dict]]:
+        """
+        오프라인 환경용 리뷰 분할 집계
+        """
+        today = datetime.now().date()
+        start_date_this_week = today - timedelta(days=period_days)
+        # WoW 이전 비교 기간
+        start_date_last_week = today - timedelta(days=2 * period_days)
+
+        reviews_this = []
+        reviews_last = []
+
+        for r in MOCK_REVIEWS:
+            if product_id and r.get("product_id") != product_id:
+                continue
+
+            r_date_str = r.get("review_date")
+            try:
+                if "T" in r_date_str:
+                    r_date = datetime.fromisoformat(r_date_str).date()
+                else:
+                    r_date = datetime.strptime(r_date_str, "%Y-%m-%d").date()
+            except Exception:
+                r_date = today
+
+            if r_date >= start_date_this_week:
+                reviews_this.append(r)
+            elif r_date >= start_date_last_week:
+                reviews_last.append(r)
+
+        return reviews_this, reviews_last
+
+    async def get_dashboard_statistics(self, product_id: str | None, period_days: int, ai_service: AIService) -> dict:
+        """
+        통합 통계 서빙 및 캐싱 서비스 레이어 메서드 (주간 대비 WoW 감지 및 Gemini 요약 포함)
+        """
+        import time
+        
+        # 1. 인메모리 TTL 캐시 확인 (60초 만료 시간 적용)
+        cache_key = (product_id, period_days)
+        if cache_key in self._stats_cache:
+            cached_time, cached_data = self._stats_cache[cache_key]
+            if time.time() - cached_time < 60:
+                print(f"[DashboardService] 캐시 히트 (TTL 60s): {cache_key}")
+                return cached_data
+
+        # 2. Supabase에서 해당 제품의 리뷰 기간별 조회
+        reviews_this = []
+        reviews_last = []
+        
+        if self.supabase is not None:
+            try:
+                today = datetime.now().date()
+                start_date_this_week = (today - timedelta(days=period_days)).isoformat()
+                start_date_last_week = (today - timedelta(days=2 * period_days)).isoformat()
+
+                # 이번 기간
+                query_this = self.supabase.table("reviews").select("*").gte("review_date", start_date_this_week)
+                if product_id:
+                    query_this = query_this.eq("product_id", product_id)
+                res_this = query_this.execute()
+                reviews_this = res_this.data if res_this.data else []
+
+                # 지난 기간 (WoW)
+                query_last = self.supabase.table("reviews").select("*")\
+                    .gte("review_date", start_date_last_week)\
+                    .lt("review_date", start_date_this_week)
+                if product_id:
+                    query_last = query_last.eq("product_id", product_id)
+                res_last = query_last.execute()
+                reviews_last = res_last.data if res_last.data else []
+            except Exception as e:
+                print(f"[DashboardService] Supabase 통계 데이터 fetch 실패, 로컬 Mock 데이터 전환: {e}")
+                reviews_this, reviews_last = self._get_mock_reviews_split(product_id, period_days)
+        else:
+            reviews_this, reviews_last = self._get_mock_reviews_split(product_id, period_days)
+
+        # 3. 통계 집계 연산 수행 (자가 치유 파싱 적용)
+        this_stats = self._aggregate_reviews(reviews_this)
+        last_stats = self._aggregate_reviews(reviews_last)
+
+        # 4. 상품명 탐색
+        product_name = "전체 제품 합산"
+        if product_id:
+            if self.supabase is not None:
+                try:
+                    p_res = self.supabase.table("products").select("name").eq("id", product_id).execute()
+                    if p_res.data:
+                        product_name = p_res.data[0]["name"]
+                except Exception:
+                    pass
+            
+            if product_name == "전체 제품 합산":
+                for p in MOCK_PRODUCTS:
+                    if p["id"] == product_id:
+                        product_name = p.get("product_name", p.get("brand_name", "") + " " + p.get("product_name", ""))
+                        break
+
+        # 5. Gemini 2.0-flash / Rule-based 실시간 브리핑 요약 획득
+        briefing = ai_service.generate_trend_briefing(this_stats, last_stats, product_name)
+
+        # 6. 최종 통계 JSON 데이터 조립
+        statistics_response = {
+            "product_id": product_id,
+            "period": period_days,
+            "total_reviews": this_stats["total_reviews"],
+            "average_rating": this_stats["average_rating"],
+            "sentiment_breakdown": this_stats["sentiment_breakdown"],
+            "attribute_scores": this_stats["attribute_scores"],
+            "ai_briefing": briefing
+        }
+
+        # 7. 인메모리 캐시 갱신
+        self._stats_cache[cache_key] = (time.time(), statistics_response)
+        print(f"[DashboardService] 신규 캐시 저장 완료: {cache_key}")
+        
+        return statistics_response
+
 
