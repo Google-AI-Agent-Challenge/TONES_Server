@@ -138,7 +138,7 @@ class DashboardService:
     def fetch_products(self) -> List[dict]:
         if self.supabase is not None:
             try:
-                response = self.supabase.table("products").select("id, brand_name, product_name, category, target_skin, created_at").order("product_name", ascending=True).execute()
+                response = self.supabase.table("products").select("id, brand_name, product_name, category, target_skin, created_at").order("product_name", desc=False).execute()
                 if response.data:
                     return response.data
             except Exception as e:
@@ -150,7 +150,7 @@ class DashboardService:
             try:
                 response = self.supabase.table("reviews").select(
                     "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).order("review_date", ascending=False).limit(limit).execute()
+                ).order("review_date", desc=True).limit(limit).execute()
                 if response.data:
                     return response.data
             except Exception as e:
@@ -166,7 +166,7 @@ class DashboardService:
                 or_filter = ",".join([f"review_text.ilike.%{kw}%" for kw in keywords])
                 response = self.supabase.table("reviews").select(
                     "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).or_(or_filter).order("review_date", ascending=False).limit(limit).execute()
+                ).or_(or_filter).order("review_date", desc=True).limit(limit).execute()
                 if response.data:
                     return response.data
             except Exception as e:
@@ -189,7 +189,7 @@ class DashboardService:
             try:
                 response = self.supabase.table("reviews").select(
                     "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).eq("product_id", product_id).order("review_date", ascending=False).limit(limit).execute()
+                ).eq("product_id", product_id).order("review_date", desc=True).limit(limit).execute()
                 if response.data:
                     return response.data
             except Exception as e:
@@ -330,37 +330,112 @@ class DashboardService:
             "processed_ids": processed_ids
         }
 
-    def _extract_scores_from_summary(self, ai_summary: str) -> dict:
+    def _extract_scores_from_summary(self, ai_summary: str, review_dict: dict = None) -> dict:
         """
-        ai_summary 문자열에서 정규표현식을 이용하여 [성분/고민], [제형/발림], [용기/디자인] 점수를 파싱 및 복원
+        ai_summary 문자열에서 정규표현식을 이용하여 [성분/고민], [제형/발림], [용기/디자인] 점수를 파싱 및 복원.
+        만약 파싱에 실패하거나 누락된 경우, review_dict(평점 및 리뷰 텍스트)를 기반으로 감성 점수를 휴리스틱하게 추정.
         """
         scores = {
             "ingredients_skin_concerns_score": 0.5,
             "formulation_spreadability_score": 0.5,
             "container_design_score": 0.5
         }
-        if not ai_summary:
-            return scores
+        
+        parsed_ok = False
+        if ai_summary:
+            try:
+                m_ing = re.search(r"\[성분/고민\]:\s*([0-9.]+)", ai_summary)
+                m_form = re.search(r"\[제형/발림\]:\s*([0-9.]+)", ai_summary)
+                m_cont = re.search(r"\[용기/디자인\]:\s*([0-9.]+)", ai_summary)
 
-        try:
-            m_ing = re.search(r"\[성분/고민\]:\s*([0-9.]+)", ai_summary)
-            m_form = re.search(r"\[제형/발림\]:\s*([0-9.]+)", ai_summary)
-            m_cont = re.search(r"\[용기/디자인\]:\s*([0-9.]+)", ai_summary)
+                if m_ing:
+                    scores["ingredients_skin_concerns_score"] = float(m_ing.group(1))
+                    parsed_ok = True
+                if m_form:
+                    scores["formulation_spreadability_score"] = float(m_form.group(1))
+                    parsed_ok = True
+                if m_cont:
+                    scores["container_design_score"] = float(m_cont.group(1))
+                    parsed_ok = True
+            except Exception as e:
+                print(f"[DashboardService] 감성 점수 파싱 중 오류: {e}")
 
-            if m_ing:
-                scores["ingredients_skin_concerns_score"] = float(m_ing.group(1))
-            if m_form:
-                scores["formulation_spreadability_score"] = float(m_form.group(1))
-            if m_cont:
-                scores["container_design_score"] = float(m_cont.group(1))
-        except Exception as e:
-            print(f"[DashboardService] 감성 점수 파싱 중 오류 (기본값 사용): {e}")
+        # 정규식 파싱이 안 되었거나 누락된 경우, review_dict가 있다면 평점 및 키워드 기반 휴리스틱 추정 실행
+        if not parsed_ok and review_dict:
+            try:
+                rating = review_dict.get("rating", 3)
+                text = review_dict.get("review_text") or review_dict.get("content") or ""
+                
+                # 평점별 기본 감성 점수 매핑 (화장품 만족도 특성에 맞춘 차별화된 베이스라인 배정)
+                # 용기/디자인은 일반적으로 Tweezers(집게) 유실/액샘 불만이 많으므로 상대적으로 낮게 시작
+                ing_base = 0.50
+                form_base = 0.50
+                cont_base = 0.50
+
+                if rating == 5:
+                    ing_base = 0.88
+                    form_base = 0.94  # 제형/발림성은 5점 리뷰에서 극찬 비율이 매우 높음
+                    cont_base = 0.74  # 5점이어도 용기에 대한 불만은 잠재되어 있는 편
+                elif rating == 4:
+                    ing_base = 0.72
+                    form_base = 0.80
+                    cont_base = 0.60
+                elif rating == 3:
+                    ing_base = 0.52
+                    form_base = 0.56
+                    cont_base = 0.40
+                elif rating == 2:
+                    ing_base = 0.30
+                    form_base = 0.36
+                    cont_base = 0.22
+                elif rating == 1:
+                    ing_base = 0.12
+                    form_base = 0.14
+                    cont_base = 0.08
+
+                ing_score = ing_base
+                form_score = form_base
+                cont_score = cont_base
+
+                # 확장된 긍정/부정 키워드 사전 (한국어 화장품 VOC 특화)
+                ing_pos = ["순해", "순하고", "자극 없", "자극없", "진정", "트러블 안", "여드름 안", "붉은기", "완화", "개선", "피부결", "진정에", "안심", "트러블성"]
+                ing_neg = ["트러블", "뒤집", "자극", "여드름", "간지러", "따가", "붉어", "좁쌀", "붉어지", "가렵", "간지", "좁쌀여드름", "피부 뒤집", "뒤집어", "화끈", "자극감"]
+                
+                form_pos = ["촉촉", "발림", "제형", "두께", "밀착", "보습", "에센스 많", "충분", "부드러", "닦토", "흡수", "수분감", "밀착력", "두툼", "패드 부드", "닦기 편", "닦토", "부드러운"]
+                form_neg = ["끈적", "밀려", "두껍", "거칠", "건조", "보풀", "찢어", "얇아", "흡수 안", "푸석", "끈적", "밀림", "보풀", "찢어짐", "거칠", "에센스 부족", "말라"]
+
+                cont_pos = ["용기", "디자인", "집게", "위생", "뚜껑", "패키지", "예뻐", "편리"]
+                cont_neg = ["불편", "새요", "샘", "집게 불편", "뚜껑 불편", "새고", "흐르고", "위생적이지", "집게 분실", "뚜껑 잘 안"]
+
+                # 성분/고민 점수 미세조정 (가중치 상향하여 변동폭 확대)
+                if any(k in text for k in ing_pos):
+                    ing_score = min(0.96, ing_score + 0.12)
+                if any(k in text for k in ing_neg):
+                    ing_score = max(0.04, ing_score - 0.22)
+
+                # 제형/발림 점수 미세조정
+                if any(k in text for k in form_pos):
+                    form_score = min(0.96, form_score + 0.12)
+                if any(k in text for k in form_neg):
+                    form_score = max(0.04, form_score - 0.22)
+
+                # 용기/디자인 점수 미세조정
+                if any(k in text for k in cont_pos):
+                    cont_score = min(0.96, cont_score + 0.12)
+                if any(k in text for k in cont_neg):
+                    cont_score = max(0.04, cont_score - 0.22)
+
+                scores["ingredients_skin_concerns_score"] = round(ing_score, 2)
+                scores["formulation_spreadability_score"] = round(form_score, 2)
+                scores["container_design_score"] = round(cont_score, 2)
+            except Exception as e:
+                print(f"[DashboardService] 휴리스틱 감성 분석 실패: {e}")
 
         return scores
 
     def _aggregate_reviews(self, reviews: list[dict]) -> dict:
         """
-        개별 리뷰 목록에 대한 통계 애그리게이션 계산 (자가 치유 파싱 지원)
+        개별 리뷰 목록에 대한 통계 애그리게이션 계산 (자가 치유 파싱 및 휴리스틱 감성 점수 추정 지원)
         """
         total = len(reviews)
         if total == 0:
@@ -392,7 +467,7 @@ class DashboardService:
             else:
                 sentiment_counts["neutral"] += 1
 
-            # 속성별 점수 추출 (컬럼 우선, 없을 경우 ai_summary 정규식 파싱)
+            # 속성별 점수 추출 (컬럼 우선, 없을 경우 ai_summary 및 휴리스틱 자가 치유 파싱)
             ing_val = r.get("score_ingredients")
             form_val = r.get("score_formulation")
             cont_val = r.get("score_container")
@@ -402,7 +477,7 @@ class DashboardService:
                 sum_form += float(form_val)
                 sum_cont += float(cont_val)
             else:
-                parsed = self._extract_scores_from_summary(r.get("ai_summary", ""))
+                parsed = self._extract_scores_from_summary(r.get("ai_summary", ""), review_dict=r)
                 sum_ing += parsed["ingredients_skin_concerns_score"]
                 sum_form += parsed["formulation_spreadability_score"]
                 sum_cont += parsed["container_design_score"]

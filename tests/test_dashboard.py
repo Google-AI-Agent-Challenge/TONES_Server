@@ -127,11 +127,33 @@ def test_get_dashboard_statistics_caching():
     assert duration2 < 0.05
 
 
-def test_statistics_endpoint_serving(client: TestClient):
-    # GET /api/v1/dashboard/statistics E2E API 서빙 검증
+def test_statistics_endpoint_without_auth(client: TestClient):
+    # 프로토타입 단계: 인증 비활성화로 인해 인증 없이 GET /api/v1/dashboard/statistics 호출 시 200 OK 반환 검증
     response = client.get(
         f"{settings.API_V1_STR}/dashboard/statistics",
         params={"product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba", "period": 7}
+    )
+    assert response.status_code == 200
+
+
+def test_statistics_endpoint_serving(client: TestClient):
+    # 1. 로그인하여 토큰 획득
+    login_response = client.post(
+        f"{settings.API_V1_STR}/auth/login/access-token",
+        data={
+            "username": "test@example.com",
+            "password": "testpassword"
+        }
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. GET /api/v1/dashboard/statistics E2E API 서빙 검증 (인증 필드 탑재)
+    response = client.get(
+        f"{settings.API_V1_STR}/dashboard/statistics",
+        params={"product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba", "period": 7},
+        headers=headers
     )
     
     assert response.status_code == 200

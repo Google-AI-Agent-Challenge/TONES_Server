@@ -62,27 +62,11 @@ def get_dashboard_service(
 
 
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    user_service: UserService = Depends(get_user_service)
-) -> dict:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="인증 정보를 검증할 수 없습니다.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        token_data = TokenPayload(**payload)
-        if token_data.sub is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    
-    user = user_service.get_by_email(token_data.sub)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="사용자를 찾을 수 없습니다."
-        )
-    return user
+def get_current_user() -> dict:
+    # 프로토타입 개발을 위한 JWT 인증 비활성화: 항상 테스트 더미 사용자 반환
+    return {
+        "id": "user_12345",
+        "email": "test@example.com",
+        "full_name": "Test User",
+        "is_active": True
+    }
