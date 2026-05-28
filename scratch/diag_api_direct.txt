@@ -1,0 +1,67 @@
+=== Direct API Call Test ===
+
+1) Getting session cookies via Selenium...
+   Clicked: '리뷰 119,721건'
+   Got 29 cookies from Selenium.
+
+=== Test A: GET /cursor (goodsNo only) ===
+[A1] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709'}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+[A2] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709', 'size': 10}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+[A3] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709', 'size': 10, 'sortType': 'RECENT'}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+[A4] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709', 'pageSize': 10, 'deviceType': 'mobile'}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+=== Test B: POST /cursor ===
+[B1] POST https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709'}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+[B2] POST https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709', 'size': 10, 'sortType': 'RECENT', 'deviceType': 'mobile'}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+[B3] POST https://m.oliveyoung.co.kr/review/api/v2/reviews/cursor
+  params/body : {'goodsNo': 'A000000166709', 'cursor': None, 'size': 10}
+  status      : 200
+  response    : {"status": "BAD_REQUEST", "code": 400, "message": "올바르지 않은 요청입니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+=== Test C: GET /cursor with goodsNo in path ===
+[C1] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/A000000166709/cursor
+  params/body : {'size': 10}
+  status      : 200
+  response    : {"status": "NOT_FOUND", "code": 404, "message": "리소스를 찾을 수 없습니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+[C2] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/A000000166709/cursor
+  params/body : {'size': 10, 'sortType': 'RECENT', 'deviceType': 'mobile'}
+  status      : 200
+  response    : {"status": "NOT_FOUND", "code": 404, "message": "리소스를 찾을 수 없습니다.", "pagination": null, "data": null, "totalCnt": null, "pageData": null}
+
+=== Test D: Other confirmed endpoints ===
+[D1] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/A000000166709/stats
+  params/body : None
+  status      : 200
+  response    : {"status": "SUCCESS", "code": 200, "message": "요청에 성공하였습니다.", "pagination": null, "data": {"goodsNumber": "A000000166709", "goodsName": "[단독기획] 스킨푸드 패드 레시피 11종 모음", "goodsImg": "https://image.oliveyoung.co.kr/cfimages/cf-goods/uploads/images/thumbnails/10/0000/0016/A00000016670919ko.jpg?l=ko", "reviewCount": 119721, "ratingDistribution": {"averageRating": 4.8, "ratingStatDtos": [{"rating": 5, "percentage": 87}, {"rating": 4, "percentage": 9}, {"rating": 3, "percentage": 3}, {"rating": 2, "percentage": 0}, {"rating": 1, "percentage": 1}]}, "satisfactionStats": []}, "totalCnt": null, "pageData": null}
+
+[D2] GET https://m.oliveyoung.co.kr/review/api/v2/reviews/options/A000000166709/count
+  params/body : None
+  status      : 200
+  response    : {"status": "SUCCESS", "code": 200, "message": "요청에 성공하였습니다.", "pagination": null, "data": {"isReviewSkinFilterAvailability": true, "hasZeroReviewOption": true, "productItemReviewCountList": [{"goodsNumber": "A000000166709", "itemNumber": "003", "optionImg": "https://image.oliveyoung.co.kr/cfimages/cf-goods/uploads/images/item/2025/11/4390890418780193573.jpg", "optionName": "[흔적진정]감자패드60매(+10매기획)", "sortSeq": 1, "reviewCount": 547}, {"goodsNumber": "A000000166709", "itemNumber": "002", "optionImg": "https://image.oliveyoung.co.kr/cfimages/cf-goods/uploads/images/item/2025/11/4685945901294787505.jpg", "optionName": "[화잘먹]복숭아패드70매", "sortSeq": 2, "reviewCount": 39}, {"goodsNumber": "A000000166709", "itemNumber": "004", "optionImg": "https://image.oliveyoung.co.kr/cfimages/cf-goods/uploads/ima
+
+
+=== ALL TESTS DONE ===

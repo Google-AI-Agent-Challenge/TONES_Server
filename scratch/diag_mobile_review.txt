@@ -1,0 +1,63 @@
+=== Mobile Review DOM Diagnosis ===
+
+Target URL: https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo=A000000166709
+Starting Edge driver (headless mobile)...
+Driver started.
+
+[1] Page loaded. Waiting 6s for JS render...
+[2] Review tab clicked: '리뷰 119,721건' (y=708)
+[3] Full page HTML saved to: D:\대외 활동 자료\Contest\Google AI Agent Challenge\Project\WooYeonChoiYeonWoo_Server\scratch\diag_mobile_review.html  (164,547 bytes)
+
+=== All elements with text '더보기' ===
+Found 0 element(s):
+
+
+=== Elements with 'gdas' or 'review' in class/id ===
+Found 10 element(s):
+
+  [0] <DIV> id='' children=1
+       class: ReviewArea_review-area__LPHNt
+       html preview: <div class="ReviewArea_review-area__LPHNt"><div class="ReviewArea_info-box__yuq3t" role="button" tabindex="0"><div class="ReviewArea_rating-star__al_PT"><span class="rating"><span class="oyblind">평점</
+
+  [1] <DIV> id='' children=3
+       class: ReviewArea_info-box__yuq3t
+       html preview: <div class="ReviewArea_info-box__yuq3t" role="button" tabindex="0"><div class="ReviewArea_rating-star__al_PT"><span class="rating"><span class="oyblind">평점</span>4.8</span></div><div class="ReviewArea
+
+  [2] <DIV> id='' children=1
+       class: ReviewArea_rating-star__al_PT
+       html preview: <div class="ReviewArea_rating-star__al_PT"><span class="rating"><span class="oyblind">평점</span>4.8</span></div>
+
+  [3] <DIV> id='' children=1
+       class: ReviewArea_review-count__WeZ28
+       html preview: <div class="ReviewArea_review-count__WeZ28"><button type="button" class="ReviewArea_btn-review__gZoOZ">리뷰 <span>119,721</span>건</button></div>
+
+  [4] <BUTTON> id='' children=1
+       class: ReviewArea_btn-review__gZoOZ
+       html preview: <button type="button" class="ReviewArea_btn-review__gZoOZ">리뷰 <span>119,721</span>건</button>
+
+  [5] <BUTTON> id='' children=3
+       class: ReviewArea_review-thumbs__LR3HK
+       html preview: <button type="button" class="ReviewArea_review-thumbs__LR3HK"><span class="ReviewArea_thumb__jPxYx"><div class="Image_image___PUbz"><img alt="reviewProfileImage60229898" loading="lazy" decoding="async
+
+  [6] <SPAN> id='' children=1
+       class: ReviewArea_thumb__jPxYx
+       html preview: <span class="ReviewArea_thumb__jPxYx"><div class="Image_image___PUbz"><img alt="reviewProfileImage60229898" loading="lazy" decoding="async" data-nimg="fill" src="https://image.oliveyoung.co.kr/uploads
+
+  [7] <SPAN> id='' children=1
+       class: ReviewArea_thumb__jPxYx
+       html preview: <span class="ReviewArea_thumb__jPxYx"><div class="Image_image___PUbz"><img alt="reviewProfileImage60215354" loading="lazy" decoding="async" data-nimg="fill" src="https://image.oliveyoung.co.kr/uploads
+
+  [8] <SPAN> id='' children=1
+       class: ReviewArea_icon-more__myhwK
+       html preview: <span class="ReviewArea_icon-more__myhwK"><span class="oyblind">리뷰 더보기</span></span>
+
+  [9] <DIV> id='' children=1
+       class: GoodsDetailTabs_review-panel__VY9kU
+       html preview: <div class="GoodsDetailTabs_review-panel__VY9kU"><oy-review-review-in-product goods-no="A000000166709" device-type="mobile" product-name=""></oy-review-review-in-product></div>
+
+
+=== Page metrics ===
+{"scrollHeight":12130,"scrollY":7203,"innerHeight":675,"totalElements":1043}
+
+=== DIAGNOSIS COMPLETE ===
+Driver closed.

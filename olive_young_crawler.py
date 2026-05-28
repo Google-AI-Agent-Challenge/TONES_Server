@@ -2,759 +2,813 @@ import time
 import re
 import sys
 import os
+import json
 import random
 import pandas as pd
-from bs4 import BeautifulSoup
-from curl_cffi import requests
+from curl_cffi import requests  # noqa: F401 (reserved for future use)
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 
-# 콘솔 출력 인코딩을 UTF-8로 강제 설정하여 한글 및 이모지 깨짐 방지
 sys.stdout.reconfigure(encoding='utf-8')
 
 # ==============================================================================
-# CONFIGURATION BLOCK (설정 영역)
+# CONFIGURATION
 # ==============================================================================
 OUTPUT_FILENAME = "스킨푸드_패드_고객리뷰.xlsx"
 EDGE_BINARY_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 # ==============================================================================
 
-# 스킨푸드 11종 패드 상품 정의 및 옵션 매핑 키워드 규칙
 TARGET_PADS = {
-    "아스파라거스 패드": {
-        "keywords": ["아스파라거스", "asparagus"],
-        "default_goods": "A000000166709"
-    },
-    "복숭아 패드": {
-        "keywords": ["복숭아", "피치", "peach"],
-        "default_goods": "A000000231714"
-    },
-    "블루 캐모마일 패드": {
-        "keywords": ["캐모마일", "chamomile", "카모마일", "블루캐모마일"],
-        "default_goods": "A000000166709"
-    },
-    "라이스 패드": {
-        "keywords": ["라이스", "rice", "쌀"],
-        "default_goods": "A000000166709"
-    },
-    "레몬그라스 패드": {
-        "keywords": ["레몬그라스", "lemongrass"],
-        "default_goods": "A000000166709"
-    },
-    "샤인머스캣 패드": {
-        "keywords": ["샤인머스캣", "shine", "머스캣"],
-        "default_goods": "A000000166709"
-    },
-    "핑크자몽 패드": {
-        "keywords": ["자몽", "grapefruit", "핑크자몽"],
-        "default_goods": "A000000166709"
-    },
-    "미나리 패드": {
-        "keywords": ["미나리", "파슬리", "parsley", "판토텐산"],
-        "default_goods": "A000000185135"
-    },
-    "당근 패드": {
-        "keywords": ["당근", "캐롯", "carrot"],
-        "default_goods": "A000000248098"
-    },
-    "감자 패드": {
-        "keywords": ["감자", "포테이토", "potato"],
-        "default_goods": "A000000200396"
-    },
-    "도토리 패드": {
-        "keywords": ["도토리", "에이콘", "acorn"],
-        "default_goods": "A000000157075"
-    }
+    "아스파라거스 패드": {"keywords": ["아스파라거스", "asparagus"],                     "default_goods": "A000000166709"},
+    "복숭아 패드":       {"keywords": ["복숭아", "피치", "peach"],                       "default_goods": "A000000231714"},
+    "블루 캐모마일 패드": {"keywords": ["캐모마일", "chamomile", "카모마일", "블루캐모마일"], "default_goods": "A000000166709"},
+    "라이스 패드":       {"keywords": ["라이스", "rice", "쌀"],                          "default_goods": "A000000166709"},
+    "레몬그라스 패드":   {"keywords": ["레몬그라스", "lemongrass"],                      "default_goods": "A000000166709"},
+    "샤인머스캣 패드":   {"keywords": ["샤인머스캣", "shine", "머스캣"],                 "default_goods": "A000000166709"},
+    "핑크자몽 패드":     {"keywords": ["자몽", "grapefruit", "핑크자몽"],                "default_goods": "A000000166709"},
+    "미나리 패드":       {"keywords": ["미나리", "파슬리", "parsley", "판토텐산"],        "default_goods": "A000000185135"},
+    "당근 패드":         {"keywords": ["당근", "캐롯", "carrot"],                        "default_goods": "A000000248098"},
+    "감자 패드":         {"keywords": ["감자", "포테이토", "potato"],                    "default_goods": "A000000200396"},
+    "도토리 패드":       {"keywords": ["도토리", "에이콘", "acorn"],                     "default_goods": "A000000157075"},
 }
 
-# 고유 상품 페이지 정의 및 수집할 스크롤 스텝 분기
-# 통합 기획전 페이지일수록 더 많은 리뷰 풀을 모으기 위해 스크롤을 길게 줍니다.
 PRODUCT_PAGES = {
-    "A000000166709": {"name": "11종 통합 기획전 페이지 (아스파라거스/라이스/도토리 등)", "scroll_steps": 500, "delay": 1.3},
-    "A000000231714": {"name": "복숭아 패드 전용/기획 페이지", "scroll_steps": 150, "delay": 1.0},
-    "A000000185135": {"name": "미나리 패드 전용 페이지", "scroll_steps": 150, "delay": 1.0},
-    "A000000248098": {"name": "당근 패드 기획전 페이지", "scroll_steps": 150, "delay": 1.0},
-    "A000000200396": {"name": "감자 패드 전용 페이지", "scroll_steps": 150, "delay": 1.0},
-    "A000000157075": {"name": "도토리 패드 전용 페이지", "scroll_steps": 150, "delay": 1.0}
+    "A000000166709": {"name": "11종 통합 기획전 페이지", "max_scroll_steps": 600, "target_reviews": 1500, "delay": 1.0},
+    "A000000231714": {"name": "복숭아 패드 전용 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
+    "A000000185135": {"name": "미나리 패드 전용 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
+    "A000000248098": {"name": "당근 패드 기획전 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
+    "A000000200396": {"name": "감자 패드 전용 페이지",    "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
+    "A000000157075": {"name": "도토리 패드 전용 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
 }
 
-# 중첩된 웹 컴포넌트(Shadow Root) 내부에 숨겨진 리뷰 데이터를 깊이 탐색하여 추출하는 핵심 JavaScript 코드
-JS_DEEP_EXTRACT = """
-let inProd = document.querySelector('oy-review-review-in-product');
-if (!inProd) return [];
-let root1 = inProd.shadowRoot;
-if (!root1) return [];
+# ==============================================================================
+# JavaScript: XHR + fetch 인터셉터
+# review 탭 클릭 전에 주입 → 이후 모든 /review/api/ 요청 본문을 캡처
+# ==============================================================================
+_INTERCEPTOR_JS = """
+if (!window.__oyIntercepted) {
+    window.__oyIntercepted = true;
+    window.__oyBatches    = [];
 
-let listProvider = root1.querySelector('oy-review-review-list-provider');
-if (!listProvider) return [];
-let reviewList = listProvider.querySelector('oy-review-review-list');
-if (!reviewList) return [];
-let root2 = reviewList.shadowRoot;
-if (!root2) return [];
-
-let items = root2.querySelectorAll('oy-review-review-item');
-let reviews = [];
-
-items.forEach(item => {
-    let itemRoot = item.shadowRoot;
-    if (!itemRoot) return;
-    
-    // 1. 작성자 닉네임 및 피부정보 추출
-    let username = "익명";
-    let skinTypes = [];
-    let userEl = itemRoot.querySelector('oy-review-review-user');
-    if (userEl && userEl.shadowRoot) {
-        let nameEl = userEl.shadowRoot.querySelector('.name');
-        if (nameEl) username = nameEl.textContent.trim();
-        
-        let skinEls = userEl.shadowRoot.querySelectorAll('.skin-type');
-        skinEls.forEach(s => skinTypes.push(s.textContent.trim()));
-    }
-    
-    // 2. 별점 추출 (별 아이콘 컴포넌트 갯수 세기)
-    let rating = 0;
-    let ratingEl = itemRoot.querySelector('.rating');
-    if (ratingEl) {
-        rating = ratingEl.querySelectorAll('oy-review-star-icon').length;
-    }
-    
-    // 3. 작성일 추출
-    let date = "";
-    let dateEl = itemRoot.querySelector('.common-info .date');
-    if (dateEl) date = dateEl.textContent.trim();
-    
-    // 4. 리뷰 상세 본문 추출
-    let content = "";
-    let contentEl = itemRoot.querySelector('oy-review-review-content');
-    if (contentEl && contentEl.shadowRoot) {
-        let pEl = contentEl.shadowRoot.querySelector('.content p');
-        if (pEl) content = pEl.textContent.trim();
-    }
-    
-    // 5. 구매 옵션명 추출
-    let optionName = "";
-    let optionEl = itemRoot.querySelector('.goods-option');
-    if (optionEl) {
-        optionName = optionEl.textContent.trim();
-    } else {
-        let optEl = itemRoot.querySelector('.option') || itemRoot.querySelector('[class*="option"]');
-        if (optEl) optionName = optEl.textContent.trim();
-    }
-    
-    if (username || content) {
-        reviews.push({
-            username: username,
-            skin_types: skinTypes.join(', '),
-            rating: rating,
-            date: date,
-            content: content,
-            option_name: optionName
+    // ── XHR ─────────────────────────────────────────────────────────
+    const _xOpen = XMLHttpRequest.prototype.open;
+    const _xSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, u) {
+        this._oy_url = String(u || '');
+        return _xOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function() {
+        this.addEventListener('load', function() {
+            if ((this._oy_url || '').includes('/review/api/')) {
+                window.__oyBatches.push({
+                    src: 'xhr', url: this._oy_url,
+                    status: this.status, body: this.responseText || ''
+                });
+            }
         });
-    }
-});
+        return _xSend.apply(this, arguments);
+    };
 
-return reviews;
+    // ── fetch ────────────────────────────────────────────────────────
+    const _origFetch = window.fetch;
+    window.fetch = async function(input, init) {
+        const url = typeof input === 'string' ? input : ((input && input.url) || '');
+        const res = await _origFetch.apply(this, arguments);
+        if (url.includes('/review/api/')) {
+            try {
+                const text = await res.clone().text();
+                window.__oyBatches.push({
+                    src: 'fetch', url: url,
+                    status: res.status, body: text || ''
+                });
+            } catch(e) {}
+        }
+        return res;
+    };
+}
 """
 
-JS_PAGINATE_NEXT = """
-const targetPage = arguments[0];
-
-// ---------------------------------------------------------------
-// STEP 1: 리뷰 컴포넌트 Shadow DOM 내부를 우선적으로 탐색
-// 리뷰 아이템 관련 태그는 탐색에서 완전히 제외
-// (리뷰 본문 안에 '다음'이라는 단어가 있으면 오클릭되는 문제 방지)
-// ---------------------------------------------------------------
-const SKIP_TAGS = new Set([
-    'OY-REVIEW-REVIEW-ITEM', 'OY-REVIEW-REVIEW-CONTENT',
-    'OY-REVIEW-REVIEW-USER', 'OY-REVIEW-STAR-ICON'
-]);
-
-function searchInRoot(root, depth) {
-    if (!root || depth > 6) return null;
-    let els = Array.from(root.querySelectorAll('*'));
-    
-    // 1차: 숫자 페이지 버튼 검색 (리뷰 아이템 태그 제외)
-    for (let el of els) {
-        if (SKIP_TAGS.has(el.tagName)) continue;
-        let text = el.textContent.trim();
-        let cls = String(el.className || '').toLowerCase();
-        if (text === targetPage.toString() &&
-            !cls.includes('swiper') && !cls.includes('slide') && !cls.includes('banner')) {
-            return { el, text, tag: el.tagName, cls, source: 'numbered-in-review' };
-        }
-    }
-    
-    // 2차: 다음/next 버튼 검색 (리뷰 아이템 태그와 해당 shadow root 순회 제외)
-    for (let el of els) {
-        if (SKIP_TAGS.has(el.tagName)) continue;
-        let text = el.textContent.trim();
-        let cls = String(el.className || '').toLowerCase();
-        let ariaLabel = (el.getAttribute ? (el.getAttribute('aria-label') || '') : '').toLowerCase();
-        let isNext = (
-            text === '>' || text === '다음' || text === '>>' || text === '»' ||
-            cls.includes('btn-next') || cls.includes('next') ||
-            ariaLabel.includes('다음') || ariaLabel.includes('next')
-        );
-        if (isNext && !cls.includes('swiper') && !cls.includes('slide') && !cls.includes('banner')) {
-            return { el, text, tag: el.tagName, cls, source: 'next-in-review' };
-        }
-        // SKIP_TAGS가 아닌 코알드만 shadow root 순회
-        if (el.shadowRoot && !SKIP_TAGS.has(el.tagName)) {
-            let found = searchInRoot(el.shadowRoot, depth + 1);
-            if (found) return found;
-        }
-    }
-    return null;
-}
-
-// 리뷰 컴포넌트 내부 우선 탐색
-let inProd = document.querySelector('oy-review-review-in-product');
-if (inProd && inProd.shadowRoot) {
-    let result = searchInRoot(inProd.shadowRoot, 0);
-    if (result) {
-        result.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return { clicked: true, text: result.text, tag: result.tag, cls: result.cls, source: result.source };
-    }
-}
-
-// ---------------------------------------------------------------
-// STEP 2: 전체 Shadow DOM 폴백 스캔 (SVGAnimatedString 안전 처리)
-// ---------------------------------------------------------------
-function collectAllElements(root, results) {
-    if (!root) return;
-    let els = Array.from(root.querySelectorAll('*'));
-    for (let el of els) {
-        results.push(el);
-        if (el.shadowRoot && !SKIP_TAGS.has(el.tagName)) collectAllElements(el.shadowRoot, results);
-    }
-}
-
-function getAncestorPath(el) {
-    let path = '';
-    let cur = el;
-    let depth = 0;
-    while (cur && depth < 15) {
-        path += ' ' + (cur.tagName || '') + '.' + String(cur.className || '') + '|' + (cur.id || '');
-        if (cur.parentNode) cur = cur.parentNode;
-        else if (cur.host) cur = cur.host;
-        else break;
-        depth++;
-    }
-    return path.toLowerCase();
-}
-
-let allElements = [];
-collectAllElements(document, allElements);
-
-let nextCandidates = [];
-for (let el of allElements) {
-    if (SKIP_TAGS.has(el.tagName)) continue;
-    let text = el.textContent.trim();
-    let cls = String(el.className || '').toLowerCase();
-    let id = (el.id || '').toLowerCase();
-    let ariaLabel = (el.getAttribute ? (el.getAttribute('aria-label') || '') : '').toLowerCase();
-    let isNextBtn = (
-        text === '>' || text === '다음' || text === 'next' || text === '>>' || text === '»' ||
-        cls.includes('next') || id.includes('next') ||
-        ariaLabel.includes('next') || ariaLabel.includes('다음')
-    );
-    if (!isNextBtn) continue;
-    let path = getAncestorPath(el);
-    if (path.includes('swiper') || path.includes('carousel') ||
-        path.includes('visual') || path.includes('slider') ||
-        path.includes('slide') || path.includes('banner')) continue;
-    let score = 0;
-    if (path.includes('review') && path.includes('pagination')) score += 40;
-    if (path.includes('oy-review')) score += 30;
-    if (path.includes('review')) score += 20;
-    if (path.includes('pagination')) score += 15;
-    if (path.includes('page')) score += 10;
-    if (cls.includes('next')) score += 5;
-    let tag = (el.tagName || '').toLowerCase();
-    if (tag === 'button' || tag === 'a') score += 3;
-    nextCandidates.push({ el, score, text, cls, tag: el.tagName });
-}
-
-nextCandidates.sort((a, b) => b.score - a.score);
-
-if (nextCandidates.length > 0) {
-    let best = nextCandidates[0];
-    best.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    return { clicked: true, text: best.text, tag: best.tag, cls: best.cls, source: 'fallback-scan', score: best.score };
-}
-
-return { clicked: false, text: '', tag: '', cls: '', source: 'not-found' };
+# 캡처된 배치를 수집하고 버퍼를 비움
+_COLLECT_BATCHES_JS = """
+const b = (window.__oyBatches || []).slice();
+window.__oyBatches = [];
+return JSON.stringify(b);
 """
 
-# 리뷰 페이지 전환 검증용 - 현재 보이는 리뷰 내용의 핑거프린트를 반환
-JS_GET_REVIEW_FINGERPRINT = """
-try {
-    let inProd = document.querySelector('oy-review-review-in-product');
-    if (!inProd || !inProd.shadowRoot) return '__no_component__';
-    let root1 = inProd.shadowRoot;
-    let listProvider = root1.querySelector('oy-review-review-list-provider');
-    if (!listProvider) return '__no_provider__';
-    let reviewList = listProvider.querySelector('oy-review-review-list');
-    if (!reviewList || !reviewList.shadowRoot) return '__no_list__';
-    let items = reviewList.shadowRoot.querySelectorAll('oy-review-review-item');
-    if (!items.length) return '__no_items__';
-    let fp = '';
-    for (let i = 0; i < Math.min(3, items.length); i++) {
-        let item = items[i];
+# ==============================================================================
+# JavaScript: Shadow DOM 직접 추출
+# 렌더링된 oy-review-review-item 요소에서 데이터 파싱
+# ==============================================================================
+_EXTRACT_JS = """
+(function(goodsNo) {
+    const reviews = [];
+    const seen    = new Set();
+
+    function findAll(root, tagLower, depth) {
+        if (!root || depth > 9) return [];
+        let found = [];
+        try {
+            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const el of all) {
+                if (el.tagName && el.tagName.toLowerCase() === tagLower) found.push(el);
+                if (el.shadowRoot) found = found.concat(findAll(el.shadowRoot, tagLower, depth + 1));
+            }
+        } catch(e) {}
+        return found;
+    }
+
+    const items = findAll(document, 'oy-review-review-item', 0);
+
+    for (const item of items) {
         if (!item.shadowRoot) continue;
-        let contentEl = item.shadowRoot.querySelector('oy-review-review-content');
-        if (!contentEl || !contentEl.shadowRoot) continue;
-        let p = contentEl.shadowRoot.querySelector('.content p');
-        if (p) fp += '|' + p.textContent.trim().substring(0, 40);
+        const sr = item.shadowRoot;
+
+        const dateEl = sr.querySelector('span.date')
+                    || sr.querySelector('[class*="date"]')
+                    || sr.querySelector('[class*="Date"]');
+        const date = dateEl ? dateEl.textContent.trim() : '';
+
+        const optEl = sr.querySelector('div.goods-option');
+        let option  = optEl ? optEl.textContent.trim() : '단품';
+        option = option.replace(/^\\[옵션\\]\\s*/, '').trim() || '단품';
+
+        const ratingDiv = sr.querySelector('div.rating');
+        let rating = 5;
+        if (ratingDiv) {
+            const stars = Array.from(ratingDiv.querySelectorAll('oy-review-star-icon'));
+            const filledCount = stars.filter(s => {
+                if (s.hasAttribute('empty'))            return false;
+                if (s.getAttribute('type') === 'empty') return false;
+                if (s.shadowRoot) {
+                    const paths = Array.from(s.shadowRoot.querySelectorAll('path[fill], circle[fill]'));
+                    for (const p of paths) {
+                        const f = (p.getAttribute('fill') || '').toLowerCase();
+                        if (f === '#d9d9d9' || f === 'gray' || f === '#ccc' || f === '#cccccc') return false;
+                    }
+                }
+                return true;
+            }).length;
+            rating = filledCount > 0 ? filledCount : stars.length;
+            if (rating < 1 || rating > 5) rating = 5;
+        }
+
+        let content = '';
+        const contentComp = sr.querySelector('oy-review-review-content');
+        if (contentComp && contentComp.shadowRoot) {
+            const csr = contentComp.shadowRoot;
+            const cEl = csr.querySelector('.review-content-container')
+                     || csr.querySelector('[class*="content-container"]')
+                     || csr.querySelector('[class*="review-content"]');
+            content = cEl ? cEl.textContent.trim() : csr.textContent.trim();
+            content = content.replace(/해당 리뷰는 성분과 내용물이 동일한[\\s\\S]*?있습니다\\./, '').trim();
+        }
+        if (!content || content.length < 5) continue;
+
+        let username = '익명';
+        const userComp = sr.querySelector('oy-review-review-user');
+        if (userComp && userComp.shadowRoot) {
+            const uEl = userComp.shadowRoot.querySelector('[class*="nickname"]')
+                     || userComp.shadowRoot.querySelector('[class*="user-id"]')
+                     || userComp.shadowRoot.querySelector('[class*="author"]')
+                     || userComp.shadowRoot.querySelector('[class*="name"]');
+            if (uEl) username = uEl.textContent.trim() || '익명';
+        }
+
+        const key = date + '::' + content.substring(0, 40);
+        if (!seen.has(key)) {
+            seen.add(key);
+            reviews.push({
+                goods_no:    goodsNo,
+                username:    username,
+                skin_types:  '',
+                rating:      rating,
+                date:        date,
+                content:     content,
+                option_name: option,
+            });
+        }
     }
-    return fp || '__empty__';
-} catch(e) { return '__error__:' + e.message; }
+    return reviews;
+})(arguments[0]);
 """
+
+# 마지막 oy-review-review-item을 뷰포트로 스크롤 (가상 스크롤 트리거)
+_SCROLL_LAST_ITEM_JS = """
+(function() {
+    function findAll(root, tagLower, depth) {
+        if (!root || depth > 9) return [];
+        let found = [];
+        try {
+            for (const el of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+                if (el.tagName && el.tagName.toLowerCase() === tagLower) found.push(el);
+                if (el.shadowRoot) found = found.concat(findAll(el.shadowRoot, tagLower, depth + 1));
+            }
+        } catch(e) {}
+        return found;
+    }
+    const items = findAll(document, 'oy-review-review-item', 0);
+    if (items.length > 0) {
+        items[items.length - 1].scrollIntoView({behavior: 'instant', block: 'end'});
+        window.scrollBy(0, 200);
+        return items.length;
+    }
+    window.scrollBy(0, 800);
+    return 0;
+})();
+"""
+
+
+# ==============================================================================
+# API 응답 파싱
+# ==============================================================================
+
+def parse_api_batch(body_text, goods_no):
+    """인터셉트된 API 응답 JSON 한 건에서 리뷰 목록 추출."""
+    reviews = []
+    try:
+        data = json.loads(body_text)
+    except Exception:
+        return reviews
+
+    _d = data.get('data')
+    _r = data.get('result')
+    # 실제 API 응답: {"data": {"goodsReviewList": [...]}}
+    review_list = (
+        data.get('goodsReviewList') or
+        data.get('reviewList') or
+        (_d.get('goodsReviewList') if isinstance(_d, dict) else None) or  # ← 실제 키
+        (_d.get('reviewList')      if isinstance(_d, dict) else None) or
+        (_r.get('goodsReviewList') if isinstance(_r, dict) else None) or
+        (_r.get('reviewList')      if isinstance(_r, dict) else None) or
+        (_d if isinstance(_d, list) else None) or
+        []
+    )
+    if not isinstance(review_list, list):
+        return reviews
+
+    for r in review_list:
+        if not isinstance(r, dict):
+            continue
+
+        # 실제 필드: content (reviewContents 등도 시도)
+        content = (r.get('content') or r.get('reviewContents') or
+                   r.get('reviewContent') or r.get('contents') or '').strip()
+        if not content or len(content) < 5:
+            continue
+
+        # 날짜: 여러 필드명 시도 → 없으면 사진 경로 날짜 → reviewId 사용
+        date = (r.get('reviewDt') or r.get('regDt') or r.get('date') or
+                r.get('createDt') or r.get('writeDate') or r.get('createDate') or '').strip()
+        if not date:
+            photos = r.get('photoReviewList') or []
+            if photos and isinstance(photos[0], dict):
+                m = re.match(r'(\d{4})/(\d{2})/(\d{2})/', photos[0].get('imagePath', ''))
+                if m:
+                    date = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+        if not date:
+            date = str(r.get('reviewId', ''))  # 최후 수단: ID를 날짜 대체로 사용
+
+        username = (r.get('memberNickNm') or r.get('nickName') or r.get('nickname') or
+                    r.get('writerNm') or r.get('memberName') or '익명').strip() or '익명'
+
+        try:
+            rating = int(r.get('reviewScore') or r.get('score') or
+                         r.get('rating') or r.get('starScore') or r.get('pointScore') or 5)
+        except Exception:
+            rating = 5
+
+        # 옵션: 최상위 필드 또는 goodsDto 안에 있음
+        goods_dto = r.get('goodsDto') or {}
+        option = (r.get('goodsOptionNm') or r.get('optionNm') or r.get('optionName') or
+                  goods_dto.get('optionName') or goods_dto.get('goodsName') or '단품').strip()
+        option = re.sub(r'^\[옵션\]\s*', '', option).strip() or '단품'
+
+        review_id = str(r.get('reviewId', ''))
+
+        reviews.append({
+            'review_id':   review_id,
+            'goods_no':    goods_no,
+            'username':    username,
+            'skin_types':  '',
+            'rating':      max(1, min(5, rating)),
+            'date':        date,
+            'content':     content,
+            'option_name': option,
+        })
+
+    return reviews
+
+
+_cursor_body_logged = False  # /cursor 응답 본문 최초 1회만 출력
+
+def collect_api_reviews(driver, goods_no):
+    """버퍼에 쌓인 API 배치를 모두 수집하고 버퍼를 초기화."""
+    global _cursor_body_logged
+    raw = driver.execute_script(_COLLECT_BATCHES_JS)
+    batches = json.loads(raw or '[]')
+    reviews = []
+    for b in batches:
+        url  = b.get('url', '')
+        body = b.get('body', '')
+        # URL은 항상 출력 (한 줄 요약)
+        short_url = url.split('?')[0].replace('https://m.oliveyoung.co.kr', '')
+        print(f"    [API] {b.get('src','').upper():5} {short_url} → {b.get('status','')}")
+        # /cursor 첫 응답 본문만 상세 출력 (필드명 확인용)
+        if not _cursor_body_logged and '/cursor' in url and body:
+            print(f"    [CURSOR body 800c] {body[:800]}")
+            _cursor_body_logged = True
+        reviews.extend(parse_api_batch(body, goods_no))
+    return reviews, len(batches)
+
+
+def extract_reviews_from_shadow_dom(driver, goods_no):
+    """Shadow DOM에서 현재 렌더링된 리뷰 추출."""
+    try:
+        result = driver.execute_script(_EXTRACT_JS, goods_no)
+        return result if result else []
+    except Exception as e:
+        print(f"    [!] Shadow DOM 추출 오류: {e}")
+        return []
+
+
+# ==============================================================================
+# Selenium 드라이버 초기화
+# ==============================================================================
 
 def init_driver():
-    """Selenium Edge 헤드리스 드라이버 초기화 (창 크기 1920x1080 강제 설정)"""
-    print("\n[*] Selenium Edge 드라이버를 초기화하는 중입니다...")
+    print("\n[*] Edge 모바일 에뮬레이션 드라이버를 초기화하는 중...")
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080") # 스크롤 차단 방지를 위한 넓은 뷰포트 강제 설정!
+    options.add_argument("--window-size=375,812")
     options.binary_location = EDGE_BINARY_PATH
-    # 자동화 차단 방지 헤더 설정
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+    )
     try:
         driver = webdriver.Edge(options=options)
-        print("[*] Edge 드라이버 초기화 및 뷰포트 설정(1920x1080) 완료.")
+        print("[*] 드라이버 초기화 완료 (375×812 모바일 뷰포트).")
         return driver
     except Exception as e:
         print(f"[!] 드라이버 초기화 실패: {e}")
         sys.exit(1)
 
-def crawl_raw_reviews_from_page(driver, goods_no, page_info):
-    """각 고유 상품 상세 페이지에서 페이지네이션을 차례대로 클릭하며 가능한 많은 로우(Raw) 리뷰 데이터를 수집"""
-    url = f"https://www.oliveyoung.co.kr/store/goods/getGoodsDetail.do?goodsNo={goods_no}"
-    print(f"\n" + "="*60)
-    print(f"[*] 크롤링 타겟 페이지: [{goods_no}] {page_info['name']}")
-    print(f"[*] URL: {url}")
-    print(f"[*] 상세 페이지 이동 중...")
-    
-    driver.get(url)
-    time.sleep(6) # 로딩 안정화 대기
-    
-    # 1. 리뷰 탭 클릭을 통해 리뷰 동적 컴포넌트 마운트
-    print("[*] '리뷰&셔터' 탭 활성화 시도 중...")
-    
-    # 리뷰 위치로 먼저 스크롤을 살짝 내려서 버튼들이 마운트되도록 보장
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.3);")
-    time.sleep(1.5)
-    
-    buttons = driver.find_elements(By.TAG_NAME, "button")
-    clicked = False
-    for btn in buttons:
-        try:
-            txt = btn.text
-            if "리뷰&셔터" in txt or "리뷰 " in txt:
-                driver.execute_script("arguments[0].click();", btn)
-                clicked = True
-                print(f"[*] 리뷰 탭 클릭 성공! (버튼 텍스트: '{txt}')")
-                break
-        except Exception:
-            continue
-            
-    if not clicked:
-        print("[!] 리뷰 탭 활성화 버튼을 직접 클릭하지 못했습니다. 디폴트로 열려있는지 확인합니다.")
-        
-    time.sleep(3.5)
-    
-    # ★ 핵심: 리뷰 탭 클릭 후 oy-review-pagination 컴포넌트가 완전히 마운트될 때까지
-    # 페이지 하단 방향으로 충분히 스크롤하여 shadow DOM 렌더링을 강제로 유도
-    print("[*] 리뷰 목록 및 페이지네이션 렌더링을 위해 스크롤 진행 중...")
-    for _ in range(4):
-        driver.execute_script("window.scrollBy(0, 600);")
-        time.sleep(0.7)
-    time.sleep(1.5)  # 페이지네이션 컴포넌트 마운트 안정화
-    
-    # 2. 페이지네이션 순회 수집 루프
-    raw_reviews = {}
-    max_pages = page_info["scroll_steps"]
-    delay = page_info["delay"]
-    
-    print(f"[*] 페이지네이션 수집 루프 시작 (최대 {max_pages}페이지 진행)")
-    
-    for page in range(1, max_pages + 1):
-        # 2-1. 매 페이지 수집 전, 리뷰 컨테이너 위치로 스크롤하여 리뷰 목록 + 페이지네이션 모두 뷰포트에 들어오도록
-        try:
-            driver.execute_script("""
-                let el = document.querySelector('oy-review-review-in-product');
-                if (el) {
-                    el.scrollIntoView({behavior: 'instant', block: 'start'});
-                } else {
-                    window.scrollTo(0, document.body.scrollHeight * 0.5);
-                }
-            """)
-            time.sleep(1.0)
-            
-            # 리뷰 목록 끝부분 + 페이지네이션이 뷰포트 안에 들어오도록 추가 스크롤
-            driver.execute_script("window.scrollBy(0, 800);")
-            time.sleep(1.5)
-            
-            # 클릭 전 현재 리뷰 핑거프린트 캡처 (페이지 전환 검증용)
-            pre_fingerprint = driver.execute_script(JS_GET_REVIEW_FINGERPRINT)
-            
-            result = driver.execute_script(JS_PAGINATE_NEXT, page + 1)
-            
-            # JS가 dict를 반환: {clicked, text, tag, cls, source}
-            if isinstance(result, dict):
-                navigated = result.get('clicked', False)
-                if navigated:
-                    print(f"    [*] 클릭 → '{result.get('text')}' [{result.get('tag')}] cls={result.get('cls')[:40]} source={result.get('source')}")
-            else:
-                navigated = bool(result)
-            
-            if not navigated:
-                # 1회 재시도
-                print(f"    [~] Page {page+1} 버튼을 찾지 못함. 1.5초 후 재시도...")
-                time.sleep(1.5)
-                driver.execute_script("window.scrollBy(0, 400);")
-                time.sleep(1.0)
-                pre_fingerprint = driver.execute_script(JS_GET_REVIEW_FINGERPRINT)
-                result = driver.execute_script(JS_PAGINATE_NEXT, page + 1)
-                if isinstance(result, dict):
-                    navigated = result.get('clicked', False)
-                    if navigated:
-                        print(f"    [*] 재시도 클릭 → '{result.get('text')}' [{result.get('tag')}] source={result.get('source')}")
-                else:
-                    navigated = bool(result)
-            
-        except Exception as e:
-            print(f"    [!] 스크롤 포커싱 도중 예외 (계속 진행): {e}")
 
-        # 2-2. 해당 페이지 리뷰 데이터 쉐도우 루트 파싱 JS 실행
-        step_reviews = driver.execute_script(JS_DEEP_EXTRACT)
-        if step_reviews:
-            for r in step_reviews:
-                key = (r['username'], r['date'], r['content'][:50])
-                if key not in raw_reviews:
-                    raw_reviews[key] = {
-                        "goods_no": goods_no,
-                        "username": r['username'],
-                        "skin_types": r['skin_types'],
-                        "rating": r['rating'],
-                        "date": r['date'],
-                        "content": r['content'],
-                        "option_name": r['option_name']
-                    }
-                    
-        print(f"    - [{page}/{max_pages}] 페이지 수집 완료 | 현재까지 누적 고유 리뷰 수: {len(raw_reviews)}개")
-        
-        # 2-3. 다음 페이지로 이동 클릭 시도 (JS_PAGINATE_NEXT 실행)
+# ==============================================================================
+# 크롤링 보조 함수
+# ==============================================================================
+
+def _dismiss_popups(driver):
+    driver.execute_script("""
+        ['닫기','그만보기','웹으로','웹에서','close'].forEach(kw => {
+            document.querySelectorAll('button,a,span').forEach(el => {
+                if (el.textContent.trim().toLowerCase().includes(kw) && el.offsetWidth > 0)
+                    try { el.click(); } catch(e) {}
+            });
+        });
+        ['[class*="popup"]','[class*="modal"]','[class*="dimmed"]',
+         '[class*="overlay"]','[class*="layer"]','[class*="banner"]'].forEach(sel =>
+            document.querySelectorAll(sel).forEach(el => {
+                const c = (el.className||'').toLowerCase(), id = (el.id||'').toLowerCase();
+                if (!c.includes('review') && !c.includes('gdas') && !id.includes('review'))
+                    el.style.display = 'none';
+            })
+        );
+        document.documentElement.style.overflow = 'auto';
+        document.body.style.overflow  = 'auto';
+        document.body.style.position  = 'static';
+    """)
+
+
+def _activate_review_tab(driver):
+    """
+    '리뷰' 탭 클릭 후 oy-review-review-in-product 마운트를 폴링으로 확인.
+    마운트가 확인될 때까지 최대 20초 대기.
+    """
+    _SKIP_CLS = ("ReviewArea_btn-review", "ReviewArea_review-thumbs",
+                 "review-count", "review-score")
+
+    def _try_click(el):
         try:
-            # 페이지네이션이 완전히 렌더링될 수 있도록 충분히 스크롤 후 대기
-            driver.execute_script("""
-                let el = document.querySelector('oy-review-review-in-product');
-                if (el) el.scrollIntoView({behavior: 'instant', block: 'end'});
-            """)
-            time.sleep(1.5)  # pagination 컴포넌트 렌더링 안정화 대기
-            driver.execute_script("window.scrollBy(0, 300);")
-            time.sleep(1.0)  # 추가 렌더링 대기
-            
-            # 클릭 전 현재 리뷰 핑거프린트 캡처 (페이지 전환 검증용)
-            pre_fingerprint = driver.execute_script(JS_GET_REVIEW_FINGERPRINT)
-            
-            navigated = driver.execute_script(JS_PAGINATE_NEXT, page + 1)
-            
-            if not navigated:
-                # 1회 재시도: 스크롤을 더 내린 뒤 다시 시도
-                print(f"    [~] Page {page+1} 버튼을 찾지 못함. 1.5초 후 재시도...")
-                time.sleep(1.5)
-                driver.execute_script("window.scrollBy(0, 400);")
-                time.sleep(1.0)
-                pre_fingerprint = driver.execute_script(JS_GET_REVIEW_FINGERPRINT)
-                navigated = driver.execute_script(JS_PAGINATE_NEXT, page + 1)
-            
-            if not navigated:
-                print(f"    [!] 다음 페이지(Page {page+1})가 존재하지 않거나 더 이상 클릭할 버튼이 없어 순회를 조기 종료합니다.")
+            txt = el.text.strip()
+            cls = el.get_attribute("class") or ""
+            tag = el.tag_name.lower()
+            if ('리뷰' in txt and 1 <= len(txt) <= 40
+                    and tag in ('li', 'button', 'a', 'span', 'div', 'em')
+                    and not any(s in cls for s in _SKIP_CLS)):
+                driver.execute_script("arguments[0].click();", el)
+                print(f"[*] 탭 클릭 시도: <{tag}> cls='{cls[:40]}' txt='{txt[:30]}'")
+                return True
+        except Exception:
+            pass
+        return False
+
+    # 1순위: GoodsDetailTabs 내부 탭 항목 (첫 성공 즉시 탈출)
+    clicked = False
+    for selector in ["[class*='GoodsDetailTabs'] li",
+                     "[class*='GoodsDetailTabs'] button",
+                     "li[role='tab']", "button[role='tab']",
+                     ".tab_menu li", "[class*='tab-menu'] li",
+                     "[class*='detail-tab'] li"]:
+        for el in driver.find_elements(By.CSS_SELECTOR, selector):
+            if _try_click(el):
+                clicked = True
                 break
-            
-            # ★ 핵심 검증: 클릭 후 리뷰 내용이 실제로 바뀌는지 확인 (최대 8초 대기)
-            # 내용이 안 바뀌면 = 잘못된 버튼을 클릭한 것 → 즉시 감지하고 종료
-            changed = False
-            for wait_i in range(16):
-                time.sleep(0.5)
-                post_fingerprint = driver.execute_script(JS_GET_REVIEW_FINGERPRINT)
-                if post_fingerprint != pre_fingerprint and not post_fingerprint.startswith('__'):
-                    changed = True
-                    break
-            
-            if not changed:
-                print(f"    [!] 페이지 전환 후 리뷰 내용이 변경되지 않음 - 클릭 타겟이 잘못됐거나 마지막 페이지입니다. 수집 종료.")
-                print(f"    [!] 현재 핑거프린트: {post_fingerprint[:80]}")
-                break
-                
-        except Exception as e:
-            print(f"    [!] 페이지네이션 클릭 시도 중 에러 발생 (수집 조기 종료): {e}")
+        if clicked:
             break
-            
-        # 페이지 전환 확인 후 추가 렌더링 안정화 대기
-        time.sleep(max(delay, 1.0) + random.uniform(0.3, 0.7))
-        
-    print(f"[*] 수집 종료. [{goods_no}] 페이지에서 총 {len(raw_reviews)}개의 고유 리뷰를 획득했습니다.")
+
+    # 2순위: XPath (CSS 선택자로 못 찾은 경우에만)
+    if not clicked:
+        for el in driver.find_elements(By.XPATH, "//*[contains(text(), '리뷰')]"):
+            if _try_click(el):
+                break
+
+    # ── 컴포넌트 마운트 폴링 (최대 20초) ─────────────────────────────
+    for i in range(20):
+        time.sleep(1.0)
+        mounted = driver.execute_script(
+            "return !!document.querySelector('oy-review-review-in-product');"
+        )
+        if mounted:
+            print(f"[*] oy-review-review-in-product 마운트 확인 ({i+1}초 경과)")
+            return True
+
+    # 마운트 실패 — 진단 정보 출력
+    oy_tags = driver.execute_script("""
+        return [...new Set(
+            Array.from(document.querySelectorAll('*'))
+                .filter(e => e.tagName.toLowerCase().startsWith('oy-'))
+                .map(e => e.tagName.toLowerCase())
+        )].slice(0, 20);
+    """)
+    tabs_found = driver.execute_script("""
+        return Array.from(document.querySelectorAll('*'))
+            .filter(e => {
+                const t = (e.textContent || '').trim();
+                return t.includes('리뷰') && t.length < 30 && e.children.length === 0;
+            })
+            .map(e => ({tag: e.tagName, cls: (e.className||'').substring(0,50),
+                        txt: e.textContent.trim().substring(0,20),
+                        y: e.getBoundingClientRect().top}))
+            .slice(0, 10);
+    """)
+    print(f"[!] 마운트 실패 — oy-* 컴포넌트: {oy_tags}")
+    print(f"[!] '리뷰' 텍스트 요소: {tabs_found}")
+    return False
+
+
+def _scroll_to_review_component(driver):
+    """oy-review-review-in-product 컴포넌트가 뷰포트에 들어오도록 스크롤."""
+    driver.execute_script("""
+        const comp = document.querySelector('oy-review-review-in-product');
+        if (comp) comp.scrollIntoView({behavior: 'instant', block: 'start'});
+        else window.scrollTo(0, document.body.scrollHeight * 0.4);
+    """)
+
+
+# ==============================================================================
+# 메인 크롤링 함수
+# ==============================================================================
+
+def crawl_raw_reviews_from_page(driver, goods_no, page_info):
+    """
+    [v4 변경 사항]
+    1. XHR + fetch 인터셉터 → /review/api/v2/reviews/cursor 응답 JSON 직접 수집
+       (가상 스크롤 DOM에 7개만 렌더링되는 문제 우회)
+    2. Shadow DOM 추출 병행 (인터셉터 파싱 실패 시 보완)
+    3. scrollBy 대신 마지막 oy-review-review-item.scrollIntoView 사용
+       → 가상 스크롤 IntersectionObserver 정확히 트리거
+    """
+    url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
+    print(f"\n{'='*60}")
+    print(f"[*] 크롤링 시작: [{goods_no}] {page_info['name']}")
+    print(f"[*] URL: {url}")
+    print(f"[*] 목표: {page_info['target_reviews']}개, 최대 스크롤: {page_info['max_scroll_steps']}회")
+
+    driver.get(url)
+    time.sleep(5.5)
+
+    # 인터셉터 주입 (리뷰 탭 클릭 전 — 이후 API 요청 전부 캡처)
+    driver.execute_script(_INTERCEPTOR_JS)
+    time.sleep(0.3)
+    print("[*] API 인터셉터 주입 완료.")
+
+    _dismiss_popups(driver)
+    time.sleep(1.0)
+
+    _activate_review_tab(driver)
+    # _activate_review_tab이 내부에서 마운트 폴링으로 대기하므로 별도 sleep 최소화
+    time.sleep(2.0)  # 1차 API 응답 수신 여유 시간
+
+    _scroll_to_review_component(driver)
+    time.sleep(2.0)
+
+    # 초기 스크롤: 리뷰 아이템이 뷰포트에 진입하도록 먼저 내려감
+    print("[*] 초기 스크롤 (5×700px) — virtual scroll 렌더링 대기...")
+    for _ in range(5):
+        driver.execute_script("window.scrollBy(0, 700);")
+        time.sleep(1.2)
+    time.sleep(2.0)
+
+    # ── 최초 Shadow DOM 상태 진단 ────────────────────────────────
+    diag = driver.execute_script("""
+        function findDeep(root, tag) {
+            if (!root) return null;
+            const el = root.querySelector ? root.querySelector(tag) : null;
+            if (el) return el;
+            for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
+                if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+            }
+            return null;
+        }
+        const comp = document.querySelector('oy-review-review-in-product');
+        if (!comp) return {step: 'no-comp'};
+        if (!comp.shadowRoot) return {step: 'no-comp-shadow'};
+        const list = findDeep(comp.shadowRoot, 'oy-review-review-list');
+        if (!list) return {step: 'no-list', compHTML: comp.shadowRoot.innerHTML.substring(0, 300)};
+        if (!list.shadowRoot) return {step: 'no-list-shadow'};
+        const items = Array.from(list.shadowRoot.querySelectorAll('oy-review-review-item'));
+        const allTags = [...new Set(Array.from(list.shadowRoot.querySelectorAll('*'))
+            .map(e => e.tagName.toLowerCase()))].slice(0, 20);
+        return {step: 'ok', itemCount: items.length, allTags,
+                listHTML: list.shadowRoot.innerHTML.substring(0, 400)};
+    """)
+    print(f"[*] Shadow DOM 초기 진단: {json.dumps(diag, ensure_ascii=False)}")
+
+    target        = page_info["target_reviews"]
+    max_scrolls   = page_info["max_scroll_steps"]
+    delay         = page_info["delay"]
+    MAX_NO_GROWTH = 30
+
+    raw_reviews   = {}
+    last_count    = 0
+    no_growth     = 0
+
+    for step in range(1, max_scrolls + 1):
+        # ── 1) API 인터셉터에서 새 배치 수집 ──────────────────────
+        api_reviews, batch_count = collect_api_reviews(driver, goods_no)
+
+        # ── 2) Shadow DOM에서 현재 렌더링된 아이템 추출 ───────────
+        dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
+
+        # ── 3) 중복 제거 병합 ─────────────────────────────────────
+        for r in api_reviews + dom_reviews:
+            # review_id가 있으면 그걸로, 없으면 날짜+내용 앞글자로 키 생성
+            key = r.get('review_id') or (r['date'] + '::' + r['content'][:40])
+            raw_reviews[key] = r
+
+        current = len(raw_reviews)
+        growth  = current - last_count
+        print(f"  [{step:>4}/{max_scrolls}] 고유: {current:>5}/{target}"
+              f"  (+{growth:>3})  API배치:{batch_count}({len(api_reviews)}건)  DOM:{len(dom_reviews)}개")
+
+        if current >= target:
+            print(f"  [+] 목표 {target}개 달성! 조기 종료.")
+            break
+
+        if current == last_count:
+            no_growth += 1
+            if no_growth >= MAX_NO_GROWTH:
+                print(f"  [!] {MAX_NO_GROWTH}회 연속 미증가. 종료.")
+                break
+            if no_growth % 10 == 0:
+                # 리뷰 컴포넌트 상단으로 돌아간 뒤 다시 내려가기
+                _scroll_to_review_component(driver)
+                time.sleep(2.0)
+                print(f"  [~] no_growth={no_growth}: 컴포넌트 상단으로 재위치")
+            elif no_growth % 5 == 0:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                print(f"  [~] no_growth={no_growth}: scrollTo(bottom) 강제 실행")
+                time.sleep(4.0)
+                continue
+        else:
+            no_growth = 0
+
+        last_count = current
+
+        # ── 마지막 렌더링 아이템 scrollIntoView → 가상 스크롤 트리거 ──
+        rendered = driver.execute_script(_SCROLL_LAST_ITEM_JS)
+        if rendered == 0:
+            # 아이템 없음 — 단순 scrollBy 폴백
+            driver.execute_script("window.scrollBy(0, 800);")
+
+        time.sleep(delay + random.uniform(0.2, 0.5))
+
+    print(f"[*] [{goods_no}] 최종 {len(raw_reviews)}개 고유 리뷰 수집 완료.")
     return list(raw_reviews.values())
 
 
+# ==============================================================================
+# 리뷰 분류
+# ==============================================================================
+
 def map_reviews_to_target_pads(all_raw_reviews):
-    """수집된 대량의 리뷰 풀에 대해 옵션명 및 상품명을 분석하여 스킨푸드 11종 패드로 분류"""
     print("\n" + "="*60)
-    print("[*] 11종 스킨푸드 패드로 리뷰 매핑 및 분류를 시작합니다...")
-    print("="*60)
-    
-    # 11종 각 패드별 리뷰 수집소 생성
-    categorized_reviews = {pad_name: [] for pad_name in TARGET_PADS.keys()}
-    unmapped_count = 0
-    
+    print("[*] 11종 패드로 리뷰 분류 시작...")
+
+    categorized = {name: [] for name in TARGET_PADS}
+    unmapped    = 0
+
     for r in all_raw_reviews:
         mapped = False
-        opt = (r['option_name'] or "").lower()
-        g_no = r['goods_no']
-        
-        # 1. 1차 매핑: 리뷰 카드 내부의 옵션명(option_name) 분석
-        for pad_name, info in TARGET_PADS.items():
+        opt    = (r['option_name'] or "").lower()
+        gno    = r['goods_no']
+
+        for pad, info in TARGET_PADS.items():
             for kw in info["keywords"]:
                 if kw in opt:
-                    categorized_reviews[pad_name].append(r)
+                    categorized[pad].append(r)
                     mapped = True
                     break
             if mapped:
                 break
-                
-        # 2. 2차 매핑 (단품 전용 페이지 대응): 
-        # 옵션명이 비어있거나 매핑에 실패한 경우, 해당 리뷰를 긁어온 상품 코드의 디폴트 타겟 패드로 분류
+
         if not mapped:
-            for pad_name, info in TARGET_PADS.items():
-                if g_no == info["default_goods"]:
-                    categorized_reviews[pad_name].append(r)
+            for pad, info in TARGET_PADS.items():
+                if gno == info["default_goods"]:
+                    categorized[pad].append(r)
                     mapped = True
                     break
-                
-        if not mapped:
-            unmapped_count += 1
-            
-    print("[*] 매핑 결과 분류 통계:")
-    for pad, revs in categorized_reviews.items():
-        print(f"    - {pad}: {len(revs)}개 분류 완료")
-    print(f"    - 분류되지 않은 기타 옵션 리뷰: {unmapped_count}개")
-    
-    return categorized_reviews
 
-def balance_reviews(pad_name, reviews, target_total=50):
-    """
-    평점 균등 분배 샘플링 알고리즘 (Recursive Rating Balancing Algorithm)
-    1~5점의 별점을 최대한 10개씩 골고루 섞되, 특정 저평가 리뷰가 부족할 경우 
-    남는 목표 수량을 다른 평점 그룹에 균등하게 재귀 재배분하여 정확히 50개를 채움.
-    """
-    print(f"\n[*] [{pad_name}] 평점 균등 샘플링 진행 중...")
-    
-    # 평점 그룹별(1점~5점) 리뷰 분류
-    reviews_by_rating = {1: [], 2: [], 3: [], 4: [], 5: []}
-    for r in reviews:
-        score = r["rating"]
-        if score in reviews_by_rating:
-            reviews_by_rating[score].append(r)
-            
-    ratings = [1, 2, 3, 4, 5]
-    available = {r: len(reviews_by_rating[r]) for r in ratings}
-    allocated = {r: 0 for r in ratings}
-    
-    total_available = sum(available.values())
-    if total_available <= target_total:
-        print(f"    [!] 가용 리뷰 수({total_available})가 목표량({target_total}) 이하입니다. 전체를 선택합니다.")
+        if not mapped:
+            unmapped += 1
+
+    print("[*] 분류 결과:")
+    for pad, revs in categorized.items():
+        print(f"    - {pad}: {len(revs)}개")
+    print(f"    - 미분류: {unmapped}개")
+    return categorized
+
+
+# ==============================================================================
+# 균등 평점 샘플링
+# ==============================================================================
+
+def balance_reviews(pad_name, reviews, target_total=185):
+    print(f"\n[*] [{pad_name}] 평점 균등 샘플링...")
+
+    by_rating   = {r: [] for r in range(1, 6)}
+    for rev in reviews:
+        s = rev["rating"]
+        if s in by_rating:
+            by_rating[s].append(rev)
+
+    available   = {r: len(by_rating[r]) for r in range(1, 6)}
+    total_avail = sum(available.values())
+    if total_avail <= target_total:
+        print(f"    [!] 가용({total_avail}) ≤ 목표({target_total}). 전체 반환.")
         return reviews
-        
-    remaining_target = target_total
-    active_ratings = list(ratings)
-    
-    # 재귀 배분 루프
-    while remaining_target > 0 and active_ratings:
-        num_groups = len(active_ratings)
-        base_share = remaining_target // num_groups
-        if base_share == 0:
-            base_share = 1
-            
+
+    allocated = {r: 0 for r in range(1, 6)}
+    remaining = target_total
+    active    = list(range(1, 6))
+
+    while remaining > 0 and active:
+        share      = max(remaining // len(active), 1)
         next_active = []
-        for r in active_ratings:
-            needed = base_share
-            av = available[r] - allocated[r]
-            
-            if av <= needed:
-                allocated[r] += av
-                remaining_target -= av
-            else:
-                allocated[r] += needed
-                remaining_target -= needed
+        for r in active:
+            avail = available[r] - allocated[r]
+            give  = min(avail, share)
+            allocated[r] += give
+            remaining    -= give
+            if avail > share:
                 next_active.append(r)
-                
-        # 한 라운드를 마친 뒤 분배가 교착상태인 경우 비례 추가 분배
-        if len(next_active) == len(active_ratings) and remaining_target > 0:
-            for r in sorted(next_active, key=lambda x: available[x] - allocated[x], reverse=True):
-                if remaining_target > 0 and (available[r] - allocated[r]) > 0:
+        if len(next_active) == len(active) and remaining > 0:
+            for r in sorted(next_active, key=lambda x: available[x]-allocated[x], reverse=True):
+                if remaining > 0 and (available[r]-allocated[r]) > 0:
                     allocated[r] += 1
-                    remaining_target -= 1
+                    remaining    -= 1
             break
-            
-        active_ratings = next_active
-        
-    # 최종 선택 및 셔플링
-    selected_reviews = []
-    for r in ratings:
-        count = allocated[r]
-        revs = reviews_by_rating[r]
-        random.shuffle(revs)
-        selected_reviews.extend(revs[:count])
-        print(f"    - 평점 {r}점: 총 {available[r]}개 중 {count}개 선택")
-        
-    print(f"    -> 최종 선정 완료: {len(selected_reviews)}개")
-    return selected_reviews
+        active = next_active
+
+    selected = []
+    for r in range(1, 6):
+        pool = by_rating[r][:]
+        random.shuffle(pool)
+        selected.extend(pool[:allocated[r]])
+        print(f"    - {r}점: {available[r]}개 중 {allocated[r]}개 선택")
+
+    print(f"    → 선정 완료: {len(selected)}개")
+    return selected
+
+
+# ==============================================================================
+# 엑셀 저장
+# ==============================================================================
 
 def save_to_premium_excel(final_reviews_dict):
-    """최종 선별된 11종 패드의 균등 평점 리뷰 데이터를 프리미엄 디자인이 적용된 단일 XLSX 시트로 저장"""
-    print(f"\n[*] 엑셀 파일 생성을 준비 중입니다... (파일명: {OUTPUT_FILENAME})")
-    
-    flat_data = []
+    print(f"\n[*] 엑셀 저장 준비... ({OUTPUT_FILENAME})")
+
+    rows = []
     for pad_name, revs in final_reviews_dict.items():
         for r in revs:
-            flat_data.append({
-                "타겟상품명": pad_name,
+            rows.append({
+                "타겟상품명":        pad_name,
                 "올리브영 상품코드": r["goods_no"],
-                "구매 옵션명": r["option_name"] if r["option_name"] else "단품",
-                "작성자": r["username"],
-                "피부타입": r["skin_types"],
-                "별점": f"{r['rating']}점",
-                "작성일": r["date"],
-                "리뷰 내용": r["content"]
+                "구매 옵션명":       r["option_name"] or "단품",
+                "작성자":            r["username"],
+                "피부타입":          r["skin_types"],
+                "별점":              f"{r['rating']}점",
+                "작성일":            r["date"],
+                "리뷰 내용":         r["content"],
             })
-            
-    df = pd.DataFrame(flat_data)
+
+    df = pd.DataFrame(rows)
     if df.empty:
-        print("[!] 최종 수집 데이터가 존재하지 않아 엑셀 파일을 생성할 수 없습니다.")
+        print("[!] 저장할 데이터 없음.")
         return
-        
-    columns_order = ["타겟상품명", "올리브영 상품코드", "구매 옵션명", "작성자", "피부타입", "별점", "작성일", "리뷰 내용"]
-    df = df[columns_order]
-    
+
+    cols = ["타겟상품명", "올리브영 상품코드", "구매 옵션명", "작성자", "피부타입", "별점", "작성일", "리뷰 내용"]
+    df   = df[cols]
+
     try:
         with pd.ExcelWriter(OUTPUT_FILENAME, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='스킨푸드 패드 리뷰')
-            
-            workbook = writer.book
-            worksheet = writer.sheets['스킨푸드 패드 리뷰']
-            
+            ws  = writer.sheets['스킨푸드 패드 리뷰']
+
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            
-            # 프리미엄 뷰티 올리브 그린 칼라 팔레트 디자인 적용
-            header_fill = PatternFill(start_color="33691E", end_color="33691E", fill_type="solid") # 깊은 올리브 그린 헤더
-            header_font = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
-            data_font = Font(name="Malgun Gothic", size=10)
-            
-            thin_border = Border(
-                left=Side(style='thin', color='EAEAEA'),
-                right=Side(style='thin', color='EAEAEA'),
-                top=Side(style='thin', color='EAEAEA'),
-                bottom=Side(style='thin', color='EAEAEA')
-            )
-            
-            # 헤더 디자인 반영
-            for col_idx in range(1, len(columns_order) + 1):
-                cell = worksheet.cell(row=1, column=col_idx)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                cell.border = thin_border
-                
-            # 데이터 로우 스타일링 및 정렬 처리
+            hdr_fill  = PatternFill(start_color="33691E", end_color="33691E", fill_type="solid")
+            hdr_font  = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
+            body_font = Font(name="Malgun Gothic", size=10)
+            thin      = Border(**{s: Side(style='thin', color='EAEAEA')
+                                   for s in ('left', 'right', 'top', 'bottom')})
+
+            for col in range(1, len(cols) + 1):
+                c = ws.cell(row=1, column=col)
+                c.fill = hdr_fill; c.font = hdr_font; c.border = thin
+                c.alignment = Alignment(horizontal="center", vertical="center")
+
             for row in range(2, len(df) + 2):
-                for col in range(1, len(columns_order) + 1):
-                    cell = worksheet.cell(row=row, column=col)
-                    cell.font = data_font
-                    cell.border = thin_border
-                    
-                    # 칼럼별 정렬 최적화
-                    # 타겟상품명, 상품코드, 작성자, 별점, 작성일은 정가운데 정렬하여 시각화 효과 극대화
-                    if col in [1, 2, 4, 6, 7]:
-                        cell.alignment = Alignment(horizontal="center", vertical="center")
-                    # 리뷰 내용은 왼쪽 정렬 및 자동 개행 (텍스트 랩핑)
+                for col in range(1, len(cols) + 1):
+                    c = ws.cell(row=row, column=col)
+                    c.font = body_font; c.border = thin
+                    if col in (1, 2, 4, 6, 7):
+                        c.alignment = Alignment(horizontal="center", vertical="center")
                     elif col == 8:
-                        cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                     else:
-                        cell.alignment = Alignment(horizontal="left", vertical="center")
-                        
-            # 행의 높이 증대
-            worksheet.row_dimensions[1].height = 32
+                        c.alignment = Alignment(horizontal="left", vertical="center")
+
+            ws.row_dimensions[1].height = 32
             for r in range(2, len(df) + 2):
-                worksheet.row_dimensions[r].height = 25
-                
-            # 열 너비 자동 최적화 맞춤
-            for col in worksheet.columns:
-                max_len = 0
-                col_letter = col[0].column_letter
-                for cell in col:
-                    val = str(cell.value or '')
-                    # 한글 보정 글자 수 계산
-                    byte_len = len(val.encode('utf-8'))
-                    visual_len = (byte_len + len(val)) // 2
-                    if visual_len > max_len:
-                        max_len = visual_len
-                # 너무 과도하게 긴 칼럼(리뷰 내용 등) 방지를 위한 적정 한도 제어
-                worksheet.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 70)
-                
-        print(f"\n[+] 프리미엄 엑셀 파일 저장 성공: {os.path.abspath(OUTPUT_FILENAME)}")
-        print(f"[+] 최종 저장된 데이터 수: {len(df)}개 행 (11개 제품군 x 최대 50개씩)")
+                ws.row_dimensions[r].height = 25
+
+            for col in ws.columns:
+                letter  = col[0].column_letter
+                max_len = max(
+                    ((len(v := str(c.value or '')).encode('utf-8').__len__() + len(v)) // 2)
+                    for c in col
+                )
+                ws.column_dimensions[letter].width = min(max(max_len + 4, 12), 70)
+
+        print(f"\n[+] 저장 완료: {os.path.abspath(OUTPUT_FILENAME)}")
+        print(f"[+] 총 {len(df)}개 행 저장됨.")
     except Exception as e:
-        print(f"[!] 엑셀 저장 도중 에러가 발생했습니다: {e}")
+        print(f"[!] 엑셀 저장 오류: {e}")
+
+
+# ==============================================================================
+# 진입점
+# ==============================================================================
 
 def main():
     print("="*60)
-    print("      올리브영 스킨푸드 11종 패드 균등 평점 리뷰 수집기")
+    print("  올리브영 스킨푸드 11종 패드 균등 평점 리뷰 수집기 v4")
+    print("  방식: API 인터셉터 + Shadow DOM 추출 + 가상 스크롤 트리거")
     print("="*60)
-    
-    # 1. Selenium 헤드리스 Edge 드라이버 구동
+
     driver = init_driver()
-    
-    all_pages_reviews = []
-    
+    all_reviews = []
+
     try:
-        # 2. 고유 상품 페이지 6개 목록을 돌며 각각 Raw 리뷰 덩어리 수집
         for idx, (goods_no, page_info) in enumerate(PRODUCT_PAGES.items()):
-            print(f"\n[*] [페이지 진행도: {idx+1}/{len(PRODUCT_PAGES)}]")
+            print(f"\n[페이지 {idx+1}/{len(PRODUCT_PAGES)}]")
             page_reviews = crawl_raw_reviews_from_page(driver, goods_no, page_info)
-            all_pages_reviews.extend(page_reviews)
-            
-            # 서버 부하 조절용 세션 전환 쿨타임 대기
+            all_reviews.extend(page_reviews)
+
             if idx < len(PRODUCT_PAGES) - 1:
-                print("[*] 다음 상품 페이지로 이동하기 전 4초간 쿨다운 대기합니다...")
+                print("[*] 다음 페이지 이동 전 4초 쿨다운...")
                 time.sleep(4)
-                
     finally:
-        print("\n[*] Selenium 드라이버를 정상 종료합니다.")
+        print("\n[*] Selenium 드라이버 종료.")
         driver.quit()
-        
-    # 3. 수집된 전체 로우 리뷰를 스킨푸드 11종 패드로 라우팅 분류
-    categorized_reviews = map_reviews_to_target_pads(all_pages_reviews)
-    
-    # 4. 각 패드별 평점 균등 배분 샘플링 실행 (목표 2000건 달성을 위해 패드별 최대 185건씩 선별)
-    final_selected_reviews = {}
-    for pad_name, rev_pool in categorized_reviews.items():
-        balanced = balance_reviews(pad_name, rev_pool, target_total=185)
-        final_selected_reviews[pad_name] = balanced
-        
-    # 5. 스타일링된 완성도 높은 프리미엄 엑셀 파일로 출력
-    save_to_premium_excel(final_selected_reviews)
-    
+
+    categorized = map_reviews_to_target_pads(all_reviews)
+
+    final = {}
+    for pad, pool in categorized.items():
+        final[pad] = balance_reviews(pad, pool, target_total=185)
+
+    save_to_premium_excel(final)
+
     print("\n" + "="*60)
-    print("      모든 크롤링 및 균등 평점 리뷰 데이터 수집 작업 완료!")
+    print("  모든 작업 완료!")
     print("="*60)
+
 
 if __name__ == "__main__":
     main()
