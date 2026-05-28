@@ -35,6 +35,7 @@ TARGET_PADS = {
 
 PRODUCT_PAGES = {
     "A000000166709": {"name": "11종 통합 기획전 페이지", "max_scroll_steps": 600, "target_reviews": 1500, "delay": 1.0},
+    "A000000206889": {"name": "스킨푸드 패드 레시피 3종 페이지", "max_scroll_steps": 300, "target_reviews": 500, "delay": 1.0},
     "A000000231714": {"name": "복숭아 패드 전용 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
     "A000000185135": {"name": "미나리 패드 전용 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
     "A000000248098": {"name": "당근 패드 기획전 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
@@ -125,6 +126,7 @@ _EXTRACT_JS = """
         const sr = item.shadowRoot;
 
         const dateEl = sr.querySelector('span.date')
+                    || sr.querySelector('.date')
                     || sr.querySelector('[class*="date"]')
                     || sr.querySelector('[class*="Date"]');
         const date = dateEl ? dateEl.textContent.trim() : '';
@@ -166,13 +168,23 @@ _EXTRACT_JS = """
         if (!content || content.length < 5) continue;
 
         let username = '익명';
+        let skinTypes = '';
         const userComp = sr.querySelector('oy-review-review-user');
         if (userComp && userComp.shadowRoot) {
-            const uEl = userComp.shadowRoot.querySelector('[class*="nickname"]')
+            const uEl = userComp.shadowRoot.querySelector('.name')
+                     || userComp.shadowRoot.querySelector('[class*="nickname"]')
                      || userComp.shadowRoot.querySelector('[class*="user-id"]')
-                     || userComp.shadowRoot.querySelector('[class*="author"]')
-                     || userComp.shadowRoot.querySelector('[class*="name"]');
+                     || userComp.shadowRoot.querySelector('[class*="author"]');
             if (uEl) username = uEl.textContent.trim() || '익명';
+
+            // 피부타입 추출 보강
+            const skinEl = userComp.shadowRoot.querySelector('.skin-types');
+            if (skinEl) {
+                skinTypes = Array.from(skinEl.querySelectorAll('.skin-type'))
+                                 .map(el => el.textContent.trim())
+                                 .filter(Boolean)
+                                 .join(', ');
+            }
         }
 
         const key = date + '::' + content.substring(0, 40);
@@ -181,7 +193,7 @@ _EXTRACT_JS = """
             reviews.push({
                 goods_no:    goodsNo,
                 username:    username,
-                skin_types:  '',
+                skin_types:  skinTypes,
                 rating:      rating,
                 date:        date,
                 content:     content,
@@ -220,8 +232,61 @@ _SCROLL_LAST_ITEM_JS = """
 
 
 # ==============================================================================
-# API 응답 파싱
+# API 응답 파싱 및 피부타입 코드 디코딩
 # ==============================================================================
+
+SKIN_TYPE_MAP = {
+    "A01": "지성",
+    "A02": "건성",
+    "A03": "복합성",
+    "A04": "중성",
+    "A05": "약건성",
+}
+
+SKIN_TONE_MAP = {
+    "B01": "웜톤",
+    "B02": "쿨톤",
+    "B03": "봄웜톤",
+    "B04": "여름쿨톤",
+    "B05": "가을웜톤",
+    "B06": "겨울쿨톤",
+}
+
+SKIN_TROUBLE_MAP = {
+    "C01": "민감성",
+    "C02": "잡티",
+    "C03": "모공",
+    "C04": "각질",
+    "C05": "트러블",
+    "C06": "블랙헤드",
+    "C07": "주름",
+    "C08": "미백",
+}
+
+def decode_skin_types(profile_dto):
+    """API의 profileDto에 포함된 피부타입/톤/고민 코드를 한글 텍스트로 복원."""
+    if not profile_dto or not isinstance(profile_dto, dict):
+        return ""
+    
+    parts = []
+    
+    # 1. 피부 타입 (skinType)
+    st = profile_dto.get("skinType")
+    if st:
+        parts.append(SKIN_TYPE_MAP.get(st, st))
+        
+    # 2. 피부 톤 (skinTone)
+    stone = profile_dto.get("skinTone")
+    if stone:
+        parts.append(SKIN_TONE_MAP.get(stone, stone))
+        
+    # 3. 피부 고민 (skinTrouble - 리스트)
+    troubles = profile_dto.get("skinTrouble") or []
+    for tr in troubles:
+        if tr:
+            parts.append(SKIN_TROUBLE_MAP.get(tr, tr))
+            
+    return ", ".join(filter(None, parts))
 
 def parse_api_batch(body_text, goods_no):
     """인터셉트된 API 응답 JSON 한 건에서 리뷰 목록 추출."""
@@ -257,8 +322,8 @@ def parse_api_batch(body_text, goods_no):
         if not content or len(content) < 5:
             continue
 
-        # 날짜: 여러 필드명 시도 → 없으면 사진 경로 날짜 → reviewId 사용
-        date = (r.get('reviewDt') or r.get('regDt') or r.get('date') or
+        # 날짜: createdDateTime 최우선 적용 → 여러 필드명 시도 → 없으면 사진 경로 날짜 → reviewId 사용
+        date = (r.get('createdDateTime') or r.get('reviewDt') or r.get('regDt') or r.get('date') or
                 r.get('createDt') or r.get('writeDate') or r.get('createDate') or '').strip()
         if not date:
             photos = r.get('photoReviewList') or []
@@ -269,8 +334,10 @@ def parse_api_batch(body_text, goods_no):
         if not date:
             date = str(r.get('reviewId', ''))  # 최후 수단: ID를 날짜 대체로 사용
 
-        username = (r.get('memberNickNm') or r.get('nickName') or r.get('nickname') or
-                    r.get('writerNm') or r.get('memberName') or '익명').strip() or '익명'
+        # 닉네임: memberNickname(profileDto 내부) 또는 nickName 등 최우선 시도
+        profile_dto = r.get('profileDto') or {}
+        username = (profile_dto.get('memberNickname') or r.get('memberNickNm') or r.get('nickName') or
+                    r.get('nickname') or r.get('writerNm') or r.get('memberName') or '익명').strip() or '익명'
 
         try:
             rating = int(r.get('reviewScore') or r.get('score') or
@@ -286,11 +353,14 @@ def parse_api_batch(body_text, goods_no):
 
         review_id = str(r.get('reviewId', ''))
 
+        # 피부타입: profileDto 내 코드 디코딩 처리
+        skin_types = decode_skin_types(profile_dto)
+
         reviews.append({
             'review_id':   review_id,
             'goods_no':    goods_no,
             'username':    username,
-            'skin_types':  '',
+            'skin_types':  skin_types,
             'rating':      max(1, min(5, rating)),
             'date':        date,
             'content':     content,
@@ -760,7 +830,7 @@ def save_to_premium_excel(final_reviews_dict):
             for col in ws.columns:
                 letter  = col[0].column_letter
                 max_len = max(
-                    ((len(v := str(c.value or '')).encode('utf-8').__len__() + len(v)) // 2)
+                    ((len((v := str(c.value or '')).encode('utf-8')) + len(v)) // 2)
                     for c in col
                 )
                 ws.column_dimensions[letter].width = min(max(max_len + 4, 12), 70)

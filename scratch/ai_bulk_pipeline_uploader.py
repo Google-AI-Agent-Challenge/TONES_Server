@@ -19,25 +19,25 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 XLSX_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "스킨푸드_패드_고객리뷰.xlsx")
 API_URL = "http://localhost:8000/api/v1/dashboard/reviews/bulk"
 
-# 스킨푸드 패드 11종 제품 고유 ID 매핑 (deterministic)
+# 스킨푸드 패드 11종 실제 DB ID 매핑
 SKINFOOD_PAD_PRODUCTS = {
-    "아스파라거스 패드": "skinfood:아스파라거스 패드",
-    "복숭아 패드": "skinfood:복숭아 패드",
-    "블루 캐모마일 패드": "skinfood:블루 캐모마일 패드",
-    "라이스 패드": "skinfood:라이스 패드",
-    "레몬그라스 패드": "skinfood:레몬그라스 패드",
-    "샤인머스캣 패드": "skinfood:샤인머스캣 패드",
-    "핑크자몽 패드": "skinfood:핑크자몽 패드",
-    "미나리 패드": "skinfood:미나리 패드",
-    "당근 패드": "skinfood:당근 패드",
-    "감자 패드": "skinfood:감자 패드",
-    "도토리 패드": "skinfood:도토리 패드",
+    "아스파라거스 패드": "0f7c1538-3f79-4eba-b7ec-892ecd124622",
+    "복숭아 패드":       "88ab38d5-c5fa-4b54-a62d-5a3d0cd0b270",
+    "블루 캐모마일 패드": "fee1ab62-21df-4890-b1f6-3d016dcbd39a",
+    "라이스 패드":       "d0b919b1-6ddd-40a8-ae22-a21b21c11de2",
+    "레몬그라스 패드":   "1b906d7f-44b8-473a-96c4-631962ada7d0",
+    "샤인머스캣 패드":   "edfb4725-3f57-45e5-aeb2-c6320634947d",
+    "핑크자몽 패드":     "e5f77ae3-b0ad-4198-b2df-a466e8a5d553",
+    "미나리 패드":       "cf920939-7d95-4e2e-924f-83d64289373c",
+    "당근 패드":         "3f128ad0-7228-4f7e-8c48-f3abc894337e",
+    "감자 패드":         "627e8cc4-383c-42a7-82de-a8b92b427098",
+    "도토리 패드":       "d8d32744-1351-4c96-a008-b4934508f758",
 }
 
 def get_product_id(pad_name: str) -> str:
-    for keyword, seed in SKINFOOD_PAD_PRODUCTS.items():
+    for keyword, pid in SKINFOOD_PAD_PRODUCTS.items():
         if keyword in pad_name:
-            return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+            return pid
     return str(uuid.uuid4())
 
 def parse_rating(raw: str) -> int:
@@ -45,14 +45,16 @@ def parse_rating(raw: str) -> int:
     return int(m.group(1)) if m else 0
 
 def parse_date(raw: str) -> str:
+    from datetime import datetime, timezone
     cleaned = str(raw).strip()
+    if not cleaned or cleaned.lower() in ("nan", "none", "null"):
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
     for fmt in ("%Y.%m.%d", "%Y-%m-%d", "%Y/%m/%d"):
         try:
-            from datetime import datetime
             return datetime.strptime(cleaned, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
-    return cleaned
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 def upload_via_ai_pipeline():
     if not os.path.exists(XLSX_PATH):

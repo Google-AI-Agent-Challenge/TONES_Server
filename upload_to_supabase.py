@@ -40,76 +40,21 @@ print(f"✅ Supabase 연결 완료: {SUPABASE_URL}")
 
 
 # ╔═══════════════════════════════════════════════════════════╗
-# ║ 스킨푸드 패드 제품 정의 (11종)                            ║
+# ║ 스킨푸드 패드 제품 정의 (11종 DB ID 매핑)                 ║
 # ╚═══════════════════════════════════════════════════════════╝
 
 SKINFOOD_PAD_PRODUCTS = {
-    "아스파라거스 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:아스파라거스 패드")),
-        "name": "스킨푸드 아스파라거스 토닝 패드",
-        "description": "아스파라거스 추출물이 톤업과 보습을 동시에 케어하는 스킨푸드 인기 토닝 패드",
-        "price": 18000,
-    },
-    "복숭아 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:복숭아 패드")),
-        "name": "스킨푸드 피치 뽀송 징크 패드",
-        "description": "복숭아 추출물과 징크 성분으로 피지를 관리하고 모공을 케어하는 뽀송 패드",
-        "price": 18000,
-    },
-    "블루 캐모마일 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:블루 캐모마일 패드")),
-        "name": "스킨푸드 블루 캐모마일 진정 패드",
-        "description": "블루 캐모마일 추출물로 예민하고 붉어진 피부를 진정시키는 저자극 패드",
-        "price": 18000,
-    },
-    "라이스 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:라이스 패드")),
-        "name": "스킨푸드 라이스 브라이트닝 패드",
-        "description": "쌀 추출물이 칙칙한 피부톤을 맑고 환하게 가꿔주는 브라이트닝 패드",
-        "price": 18000,
-    },
-    "레몬그라스 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:레몬그라스 패드")),
-        "name": "스킨푸드 레몬그라스 모공 케어 패드",
-        "description": "레몬그라스 추출물로 모공을 타이트하게 관리해주는 상쾌한 모공 케어 패드",
-        "price": 18000,
-    },
-    "샤인머스캣 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:샤인머스캣 패드")),
-        "name": "스킨푸드 샤인머스캣 수분 패드",
-        "description": "샤인머스캣 추출물로 건조한 피부에 촉촉한 수분을 공급하는 패드",
-        "price": 18000,
-    },
-    "핑크자몽 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:핑크자몽 패드")),
-        "name": "스킨푸드 핑크자몽 모공 줄여주는 패드",
-        "description": "핑크자몽 추출물로 넓어진 모공을 케어하고 유분기를 잡아주는 패드",
-        "price": 18000,
-    },
-    "미나리 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:미나리 패드")),
-        "name": "스킨푸드 미나리 진정 패드",
-        "description": "미나리 추출물로 외부 자극에 예민해진 피부를 순하게 진정시키는 패드",
-        "price": 18000,
-    },
-    "당근 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:당근 패드")),
-        "name": "스킨푸드 캐롯 카로틴 카밍 워터 패드",
-        "description": "당근 카로틴 성분으로 피부를 촉촉하게 진정시키고 영양을 공급하는 패드",
-        "price": 18000,
-    },
-    "감자 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:감자 패드")),
-        "name": "스킨푸드 포테이토 브라이트닝 패드",
-        "description": "감자 추출물로 칙칙하고 어두운 피부톤을 맑고 투명하게 케어하는 패드",
-        "price": 18000,
-    },
-    "도토리 패드": {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, "skinfood:도토리 패드")),
-        "name": "스킨푸드 도토리 모공 조여주는 패드",
-        "description": "도토리 추출물의 탄닌 성분으로 넓어진 모공을 타이트하게 조여주는 패드",
-        "price": 18000,
-    },
+    "아스파라거스 패드": {"id": "0f7c1538-3f79-4eba-b7ec-892ecd124622"},
+    "복숭아 패드":       {"id": "88ab38d5-c5fa-4b54-a62d-5a3d0cd0b270"},
+    "블루 캐모마일 패드": {"id": "fee1ab62-21df-4890-b1f6-3d016dcbd39a"},
+    "라이스 패드":       {"id": "d0b919b1-6ddd-40a8-ae22-a21b21c11de2"},
+    "레몬그라스 패드":   {"id": "1b906d7f-44b8-473a-96c4-631962ada7d0"},
+    "샤인머스캣 패드":   {"id": "edfb4725-3f57-45e5-aeb2-c6320634947d"},
+    "핑크자몽 패드":     {"id": "e5f77ae3-b0ad-4198-b2df-a466e8a5d553"},
+    "미나리 패드":       {"id": "cf920939-7d95-4e2e-924f-83d64289373c"},
+    "당근 패드":         {"id": "3f128ad0-7228-4f7e-8c48-f3abc894337e"},
+    "감자 패드":         {"id": "627e8cc4-383c-42a7-82de-a8b92b427098"},
+    "도토리 패드":       {"id": "d8d32744-1351-4c96-a008-b4934508f758"},
 }
 
 
@@ -131,12 +76,14 @@ def parse_rating(raw: str) -> int:
 def parse_date(raw: str) -> str:
     """'2026.04.10' → '2026-04-10'"""
     cleaned = str(raw).strip()
+    if not cleaned or cleaned.lower() in ("nan", "none", "null"):
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
     for fmt in ("%Y.%m.%d", "%Y-%m-%d", "%Y/%m/%d"):
         try:
             return datetime.strptime(cleaned, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
-    return cleaned
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def truncate_text(text: str, max_len: int = 10000) -> str:
@@ -228,7 +175,7 @@ def load_and_transform() -> list[dict]:
         record = {
             "id":              row_id,
             "product_id":      product_id,
-            "source":          "올리브영 온/오프라인",
+            "source":          "OliveYoung-OnOffline-Crawling",
             "reviewer_type":   skin_type,
             "review_text":     f"[{product_name}] {option_name}\n{review_text}",
             "rating":          rating,
@@ -300,8 +247,8 @@ if __name__ == "__main__":
     print("  스킨푸드 패드 리뷰 → Supabase 업로더 v2")
     print("=" * 60)
 
-    # 1) 제품 등록
-    register_products()
+    # 1) 제품 등록 (이미 등록되어 있으므로 생략)
+    # register_products()
 
     # 2) 리뷰 변환
     records = load_and_transform()
