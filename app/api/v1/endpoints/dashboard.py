@@ -73,10 +73,11 @@ async def get_dashboard_statistics(
     product_id: Optional[str] = Query(None, description="특정 제품 필터 ID (미지정 시 전체 상품 합산)"),
     period: int = Query(7, description="조회할 기간 범위 (일 수, 기본 7일)"),
     dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
-    ai_service: AIService = Depends(deps.get_ai_service)
+    ai_service: AIService = Depends(deps.get_ai_service),
+    current_user: dict = Depends(deps.get_current_user)
 ):
     """
-    대시보드 통계 서빙 및 캐싱 조회 API (Recharts 연동용 차트 데이터 및 AI 트렌드 브리핑 리턴)
+    대시보드 통계 서빙 및 캐싱 조회 API (Recharts 연동용 차트 데이터 및 AI 트렌드 브리핑 리턴) (인증 필요)
     """
     result = await dashboard_service.get_dashboard_statistics(product_id, period, ai_service)
     return result
