@@ -7,7 +7,7 @@ __pycache__/
 *.so
 
 # Excel Files
-*.xlsx
+*/*.xlsx
 
 # Hidden Files
 .*

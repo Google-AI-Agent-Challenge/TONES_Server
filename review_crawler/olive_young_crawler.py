@@ -15,7 +15,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-OUTPUT_FILENAME = "스킨푸드_패드_고객리뷰.xlsx"
+OUTPUT_FILENAME = os.path.join(os.path.dirname(__file__), "스킨푸드_패드_고객리뷰.xlsx")
 EDGE_BINARY_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 # ==============================================================================
 
