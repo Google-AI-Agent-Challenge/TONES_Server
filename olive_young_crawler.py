@@ -541,6 +541,266 @@ def _scroll_to_review_component(driver):
 
 
 # ==============================================================================
+# 옵션 필터링 기반 크롤링 함수
+# ==============================================================================
+
+def crawl_with_options_filtering(driver, goods_no, page_info):
+    """
+    [v5 추가 기능]
+    상품 상세 페이지에서 '상품 옵션' 필터링 버튼을 통해 모달을 호출하고,
+    각 옵션(예: 각 패드 기획 상품)별로 리뷰 페이지를 필터링 조회하여 수집하는 고유 기능.
+    """
+    url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
+    print(f"\n{'='*60}")
+    print(f"[*] [옵션 필터링 적용] 크롤링 시작: [{goods_no}] {page_info['name']}")
+    print(f"[*] URL: {url}")
+
+    driver.get(url)
+    time.sleep(5.5)
+
+    # 인터셉터 주입 (리뷰 탭 클릭 전 — 이후 API 요청 전부 캡처)
+    driver.execute_script(_INTERCEPTOR_JS)
+    time.sleep(0.3)
+    print("[*] API 인터셉터 주입 완료.")
+
+    _dismiss_popups(driver)
+    time.sleep(1.0)
+
+    mounted = _activate_review_tab(driver)
+    if not mounted:
+        print("[!] 리뷰 컴포넌트 마운트 실패.")
+        return []
+
+    _scroll_to_review_component(driver)
+    time.sleep(2.0)
+
+    # 1. Click "상품 옵션" button inside the shadowRoot of oy-review-filter-chips to open the option list
+    open_success = driver.execute_script("""
+        function findDeep(root, tag) {
+            if (!root) return null;
+            const el = root.querySelector ? root.querySelector(tag) : null;
+            if (el) return el;
+            for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
+                if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+            }
+            return null;
+        }
+        const comp = document.querySelector('oy-review-review-in-product');
+        if (!comp || !comp.shadowRoot) return false;
+        const chipsComp = findDeep(comp.shadowRoot, 'oy-review-filter-chips');
+        if (!chipsComp || !chipsComp.shadowRoot) return false;
+        const list = Array.from(chipsComp.shadowRoot.querySelectorAll('li'));
+        for (const li of list) {
+            if (li.textContent.trim().includes('상품 옵션')) {
+                const btn = li.querySelector('oy-review-common-button');
+                if (btn && btn.shadowRoot) {
+                    const actualBtn = btn.shadowRoot.querySelector('button');
+                    if (actualBtn) { actualBtn.click(); return true; }
+                }
+                li.click();
+                return true;
+            }
+        }
+        return false;
+    """)
+    print(f"[*] 상품 옵션 모달 오픈 시도: {open_success}")
+    time.sleep(2.5)
+
+    # 2. Retrieve all options from oy-review-goods-option-sheet shadow DOM
+    options_list = driver.execute_script("""
+        function findDeep(root, tag) {
+            if (!root) return null;
+            const el = root.querySelector ? root.querySelector(tag) : null;
+            if (el) return el;
+            for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
+                if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+            }
+            return null;
+        }
+        const sheet = findDeep(document, 'oy-review-goods-option-sheet');
+        if (!sheet || !sheet.shadowRoot) return [];
+        const options = Array.from(sheet.shadowRoot.querySelectorAll('li.option'));
+        return options.map((opt, idx) => {
+            const name = opt.querySelector('.option-name').textContent.trim();
+            const count = opt.querySelector('.review-count').textContent.trim();
+            return { index: idx, name: name, count: count };
+        });
+    """)
+
+    print(f"[*] 총 {len(options_list)}개의 옵션을 탐지했습니다:")
+    for opt in options_list:
+        print(f"    - [{opt['index']}] {opt['name']} ({opt['count']})")
+
+    all_option_reviews = {}
+
+    for opt_idx, opt in enumerate(options_list):
+        opt_name = opt['name']
+        opt_count_str = opt['count']
+        
+        # Parse count to integer
+        parsed_count = 0
+        m = re.search(r'(\d+)', opt_count_str.replace(',', ''))
+        if m:
+            parsed_count = int(m.group(1))
+        
+        # Determine dynamic target for this option
+        opt_target = min(250, parsed_count)
+        if opt_target == 0:
+            print(f"\n[~] [{opt_idx+1}/{len(options_list)}] {opt_name} -> 리뷰 0건. 건너뜁니다.")
+            continue
+            
+        print(f"\n{'-'*50}")
+        print(f"[+] [{opt_idx+1}/{len(options_list)}] 옵션 필터 선택: {opt_name}")
+        print(f"[+] 해당 옵션 총 리뷰 수: {parsed_count}건, 수집 목표: {opt_target}개")
+
+        # Open options modal if not open
+        is_open = driver.execute_script("""
+            function findDeep(root, tag) {
+                if (!root) return null;
+                const el = root.querySelector ? root.querySelector(tag) : null;
+                if (el) return el;
+                for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
+                    if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+                }
+                return null;
+            }
+            const comp = findDeep(document, 'oy-review-bottom-sheet');
+            if (comp && comp.shadowRoot) {
+                const container = comp.shadowRoot.querySelector('.bottom-sheet-container');
+                return container ? container.classList.contains('is-open') : false;
+            }
+            return false;
+        """)
+        
+        if not is_open:
+            print("[*] 옵션 필터 모달이 닫혀 있어 다시 엽니다...")
+            driver.execute_script("""
+                function findDeep(root, tag) {
+                    if (!root) return null;
+                    const el = root.querySelector ? root.querySelector(tag) : null;
+                    if (el) return el;
+                    for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
+                        if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+                    }
+                    return null;
+                }
+                const comp = document.querySelector('oy-review-review-in-product');
+                const chipsComp = findDeep(comp.shadowRoot, 'oy-review-filter-chips');
+                const list = Array.from(chipsComp.shadowRoot.querySelectorAll('li'));
+                for (const li of list) {
+                    if (li.textContent.trim().includes('상품 옵션')) {
+                        const btn = li.querySelector('oy-review-common-button');
+                        if (btn && btn.shadowRoot) {
+                            btn.shadowRoot.querySelector('button').click();
+                        } else {
+                            li.click();
+                        }
+                        break;
+                    }
+                }
+            """)
+            time.sleep(2.0)
+
+        # Select option in UI
+        driver.execute_script("""
+            const targetIndex = arguments[0];
+            function findDeep(root, tag) {
+                if (!root) return null;
+                const el = root.querySelector ? root.querySelector(tag) : null;
+                if (el) return el;
+                for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
+                    if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+                }
+                return null;
+            }
+            const sheet = findDeep(document, 'oy-review-goods-option-sheet');
+            
+            // 1. Click reset button first to clear existing selections
+            const resetBtn = sheet.shadowRoot.querySelector('.reset-button');
+            if (resetBtn) resetBtn.click();
+            
+            // 2. Select the option at targetIndex
+            const options = Array.from(sheet.shadowRoot.querySelectorAll('li.option'));
+            if (options[targetIndex]) {
+                options[targetIndex].click();
+            }
+            
+            // 3. Click review-button
+            const viewBtn = sheet.shadowRoot.querySelector('.review-button');
+            if (viewBtn) viewBtn.click();
+        """, opt_idx)
+        
+        time.sleep(2.5)  # Wait for reviews to refresh
+
+        option_reviews = {}
+        
+        # ── 1차 응답 수집: 필터 적용 직후 로드된 리뷰 수집 (특히 리뷰 수가 적은 희소 상품용) ──
+        api_reviews, batch_count = collect_api_reviews(driver, goods_no)
+        dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
+        for r in api_reviews + dom_reviews:
+            key = r.get('review_id') or (r['date'] + '::' + r['content'][:40])
+            option_reviews[key] = r
+
+        # Initialize scroll variables for this option
+        max_scrolls = page_info["max_scroll_steps"]
+        delay = page_info["delay"]
+        MAX_NO_GROWTH = 15  # Slightly shorter for per-option crawl to save time
+        
+        last_count = len(option_reviews)
+        no_growth = 0
+        
+        print(f"[*] [{opt_name}] 옵션 리뷰 스크롤 및 크롤링 시작...")
+
+        for step in range(1, max_scrolls + 1):
+            # ── 1) API 인터셉터에서 새 배치 수집 ──────────────────────
+            api_reviews, batch_count = collect_api_reviews(driver, goods_no)
+            
+            # ── 2) Shadow DOM에서 현재 렌더링된 아이템 추출 ───────────
+            dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
+            
+            # ── 3) 중복 제거 병합 ─────────────────────────────────────
+            for r in api_reviews + dom_reviews:
+                key = r.get('review_id') or (r['date'] + '::' + r['content'][:40])
+                option_reviews[key] = r
+                
+            current = len(option_reviews)
+            growth = current - last_count
+            print(f"  [{step:>4}/{max_scrolls}] 옵션고유: {current:>5}/{opt_target} (+{growth:>3}) API:{batch_count} DOM:{len(dom_reviews)}")
+            
+            if current >= opt_target:
+                print(f"  [+] 옵션 목표 {opt_target}개 달성! 조기 종료.")
+                break
+                
+            if current == last_count:
+                no_growth += 1
+                if no_growth >= MAX_NO_GROWTH:
+                    print(f"  [!] {MAX_NO_GROWTH}회 연속 미증가. 옵션 종료.")
+                    break
+                if no_growth % 5 == 0:
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(3.0)
+            else:
+                no_growth = 0
+                
+            last_count = current
+            
+            # scrollIntoView to trigger virtual scroll IntersectionObserver
+            rendered = driver.execute_script(_SCROLL_LAST_ITEM_JS)
+            if rendered == 0:
+                driver.execute_script("window.scrollBy(0, 800);")
+                
+            time.sleep(delay + random.uniform(0.1, 0.3))
+            
+        print(f"[+] [{opt_name}] 최종 {len(option_reviews)}개 고유 리뷰 수집 완료.")
+        all_option_reviews.update(option_reviews)
+
+    print(f"\n{'-' * 60}")
+    print(f"[*] [{goods_no}] 통합 옵션 필터링 완료: 총 {len(all_option_reviews)}개 고유 리뷰 수집됨.")
+    print(f"{'=' * 60}\n")
+    return list(all_option_reviews.values())
+
+
+# ==============================================================================
 # 메인 크롤링 함수
 # ==============================================================================
 
@@ -553,6 +813,9 @@ def crawl_raw_reviews_from_page(driver, goods_no, page_info):
     3. scrollBy 대신 마지막 oy-review-review-item.scrollIntoView 사용
        → 가상 스크롤 IntersectionObserver 정확히 트리거
     """
+    if goods_no in ["A000000166709", "A000000206889"]:
+        return crawl_with_options_filtering(driver, goods_no, page_info)
+
     url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
     print(f"\n{'='*60}")
     print(f"[*] 크롤링 시작: [{goods_no}] {page_info['name']}")
@@ -772,6 +1035,14 @@ def balance_reviews(pad_name, reviews, target_total=185):
 
 def save_to_premium_excel(final_reviews_dict):
     print(f"\n[*] 엑셀 저장 준비... ({OUTPUT_FILENAME})")
+
+    # 기존에 파일이 이미 저장되어 있다면, 저장된 데이터를 삭제
+    if os.path.exists(OUTPUT_FILENAME):
+        try:
+            os.remove(OUTPUT_FILENAME)
+            print(f"[*] 기존의 '{OUTPUT_FILENAME}' 파일 및 데이터를 성공적으로 삭제했습니다. 새로운 데이터로 갱신합니다.")
+        except Exception as e:
+            print(f"[!] 기존 파일 삭제 중 오류 발생 (파일이 열려있을 수 있습니다): {e}")
 
     rows = []
     for pad_name, revs in final_reviews_dict.items():
