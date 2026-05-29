@@ -82,4 +82,6 @@ jobs:
       - name: Deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --detach
+        # TODO: 만약 Railway 대시보드에 설정된 실제 백엔드 서비스명이 'wooyeon-server'가 아닌 경우,
+        # 아래의 '--service wooyeon-server' 부분을 실제 서비스명으로 변경해 주세요.
+        run: railway up --detach --service TONES_Server
