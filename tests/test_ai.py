@@ -106,6 +106,12 @@ def test_ai_service_absa_offline():
 
 def test_bulk_upload_endpoint_offline(client: TestClient):
     # POST /api/v1/dashboard/reviews/bulk 엔드포인트 비인증 가상 크롤러 데이터 처리 검증
+    from app.main import app
+    from app.api.deps import get_supabase_client, get_pinecone_client
+    
+    app.dependency_overrides[get_supabase_client] = lambda: None
+    app.dependency_overrides[get_pinecone_client] = lambda: None
+    
     payload = [
         {
             "product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba",
@@ -122,15 +128,18 @@ def test_bulk_upload_endpoint_offline(client: TestClient):
             "source": "네이버"
         }
     ]
-    response = client.post(
-        f"{settings.API_V1_STR}/dashboard/reviews/bulk",
-        json=payload
-    )
-    assert response.status_code == 201 or response.status_code == 200
-    data = response.json()
-    assert data["status"] == "completed"
-    assert data["total_reviews"] == 2
-    assert len(data["processed_ids"]) == 2
+    try:
+        response = client.post(
+            f"{settings.API_V1_STR}/dashboard/reviews/bulk",
+            json=payload
+        )
+        assert response.status_code == 201 or response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["total_reviews"] == 2
+        assert len(data["processed_ids"]) == 2
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_supabase_self_healing_and_rollback_transaction():
@@ -166,8 +175,7 @@ def test_supabase_self_healing_and_rollback_transaction():
         skin_type="지성"
     )
     
-    loop = asyncio.get_event_loop()
-    res = loop.run_until_complete(service.process_and_save_reviews([review], ai_service))
+    res = asyncio.run(service.process_and_save_reviews([review], ai_service))
     
     assert res["success_count"] == 1
     assert res["failure_count"] == 0
@@ -180,7 +188,7 @@ def test_supabase_self_healing_and_rollback_transaction():
     ai_service_pc = AIService(pinecone_client=mock_pinecone)
     
     service_fail = DashboardService(supabase_client=mock_supabase_fail)
-    res_fail = loop.run_until_complete(service_fail.process_and_save_reviews([review], ai_service_pc))
+    res_fail = asyncio.run(service_fail.process_and_save_reviews([review], ai_service_pc))
     
     assert res_fail["success_count"] == 0
     assert res_fail["failure_count"] == 1
@@ -257,7 +265,7 @@ def test_gemini_fallback_and_degradation_flow(monkeypatch):
     ai_service = AIService(pinecone_client=None)
     
     # 2.0-flash 주소에 대해서는 503 Service Unavailable, 1.5-flash 주소에 대해서는 200 OK 모사
-    def mock_post(url, *args, **kwargs):
+    def mock_post(self, url, *args, **kwargs):
         class MockResponse:
             def __init__(self, status_code, json_data, text=""):
                 self.status_code = status_code
@@ -295,7 +303,7 @@ def test_gemini_fallback_and_degradation_flow(monkeypatch):
         assert "성공적으로 생성된 답변" in answer
         
         # 2.0과 1.5가 모두 장애가 나면 로컬 오프라인 더미로 폴백되는지도 검증
-        def mock_post_all_fail(url, *args, **kwargs):
+        def mock_post_all_fail(self, url, *args, **kwargs):
             class MockResponse:
                 def __init__(self, status_code, text=""):
                     self.status_code = status_code
