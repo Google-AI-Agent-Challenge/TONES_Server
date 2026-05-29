@@ -280,7 +280,17 @@ class AIService:
         neg_words = ["자극", "아쉽", "불편", "따갑", "트러블", "좁쌀", "붉", "여드름", "밀림", "끈적"]
         
         pos_count = sum(1 for w in pos_words if w in review_text)
-        neg_count = sum(1 for w in neg_words if w in review_text)
+        
+        # Calculate neg_count, accounting for negated "자극"
+        neg_count = 0
+        for w in neg_words:
+            if w in review_text:
+                if w == "자극":
+                    idx = review_text.find("자극")
+                    context = review_text[idx:idx+15]
+                    if "없" in context or "안" in context:
+                        continue # "자극 없음"은 부정 키워드로 계산하지 않음
+                neg_count += 1
         
         overall_score = 0.5
         if pos_count > neg_count:
@@ -294,18 +304,32 @@ class AIService:
         elif overall_score <= 0.3:
             sentiment = "negative"
             
+        # Check for irritation/trouble keywords, handling potential negation for "자극"
+        has_irritation_issue = False
+        for w in ["트러블", "붉", "따갑", "여드름"]:
+            if w in review_text:
+                has_irritation_issue = True
+        
+        if "자극" in review_text:
+            idx = review_text.find("자극")
+            context = review_text[idx:idx+15]
+            if "없" in context or "안" in context:
+                pass # 자극 없음 -> 부정적 성분 이슈가 아님
+            else:
+                has_irritation_issue = True
+
         ingredients_score = 0.5
         formulation_score = 0.5
         container_score = 0.5
         
-        if any(w in review_text for w in ["자극", "트러블", "붉", "따갑", "여드름"]):
+        if has_irritation_issue:
             ingredients_score = 0.15
-        elif any(w in review_text for w in ["순하", "진정"]):
+        elif any(w in review_text for w in ["순하", "진정"]) or ("자극" in review_text and not has_irritation_issue):
             ingredients_score = 0.85
             
-        if any(w in review_text for w in ["끈적", "밀림", "제형"]):
+        if any(w in review_text for w in ["끈적", "밀림"]):
             formulation_score = 0.20
-        elif any(w in review_text for w in ["촉촉", "부드럽"]):
+        elif any(w in review_text for w in ["촉촉", "부드럽", "제형"]):
             formulation_score = 0.90
             
         if any(w in review_text for w in ["불편", "용기", "뚜껑", "집게"]):

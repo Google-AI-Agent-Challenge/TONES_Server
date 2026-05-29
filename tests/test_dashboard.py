@@ -110,13 +110,12 @@ def test_get_dashboard_statistics_caching():
     # 1. 첫 번째 연산 (캐시 미스, 신규 저장)
     start_time = time.time()
     import asyncio
-    loop = asyncio.get_event_loop()
-    res1 = loop.run_until_complete(service.get_dashboard_statistics(product_id, period, ai_service))
+    res1 = asyncio.run(service.get_dashboard_statistics(product_id, period, ai_service))
     duration1 = time.time() - start_time
     
     # 2. 두 번째 연산 (캐시 히트, 즉시 조회)
     start_time2 = time.time()
-    res2 = loop.run_until_complete(service.get_dashboard_statistics(product_id, period, ai_service))
+    res2 = asyncio.run(service.get_dashboard_statistics(product_id, period, ai_service))
     duration2 = time.time() - start_time2
     
     # 캐시된 결과가 동일한지 검증
