@@ -1,0 +1,46 @@
+steps:
+  # 1. Artifact Registry에 업로드할 Docker 이미지 빌드
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:latest',
+      '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:$COMMIT_SHA',
+      '.'
+    ]
+
+  # 2. 빌드된 도커 이미지를 Artifact Registry로 푸시
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:latest'
+    ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:$COMMIT_SHA'
+    ]
+
+  # 3. Google Cloud Run에 도커 컨테이너 서비스 배포
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args: [
+      'run', 'deploy', 'tones-server',
+      '--image', 'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:$COMMIT_SHA',
+      '--region', 'us-central1',
+      '--platform', 'managed',
+      '--allow-unauthenticated',
+      '--min-instances', '0',
+      '--max-instances', '5',
+      '--cpu', '1',
+      '--memory', '2Gi',
+      # Cloud SQL 안전한 연결을 위한 인스턴스 정보 연동 (배포 트리거 설정 시 변수로 매핑 가능)
+      # '--add-cloudsql-instances', '${_CLOUD_SQL_CONNECTION_NAME}',
+      # '--set-env-vars', 'CLOUD_SQL_CONNECTION_NAME=${_CLOUD_SQL_CONNECTION_NAME},DB_NAME=${_DB_NAME},DB_USER=${_DB_USER}'
+    ]
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:latest'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/tones-repo/tones-server:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
