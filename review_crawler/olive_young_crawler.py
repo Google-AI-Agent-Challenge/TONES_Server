@@ -5,7 +5,10 @@ import os
 import json
 import random
 import pandas as pd
-from curl_cffi import requests  # noqa: F401 (reserved for future use)
+try:
+    from curl_cffi import requests  # noqa: F401 (reserved for future use)
+except ImportError:
+    requests = None
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By

@@ -13,9 +13,9 @@ if settings.SENTRY_DSN:
     )
 
 app = FastAPI(
-    title=settings.PROJECT_NAME,
+    title="TONES Server",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    description="WooYeonChoiYeonWoo Backend Server - FastAPI",
+    description="TONES B2B AI Review Analytics Dashboard Backend API",
     version="1.0.0"
 )
 

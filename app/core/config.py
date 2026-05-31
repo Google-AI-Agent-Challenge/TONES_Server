@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "WooYeonChoiYeonWoo Server"
+    PROJECT_NAME: str = "TONES Server"
     API_V1_STR: str = "/api/v1"
     SECRET_KEY: str = "super-secret-key-change-this-in-production-12345"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60

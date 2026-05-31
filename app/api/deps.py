@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import jwt, JWTError
+import jwt
+from jwt.exceptions import InvalidTokenError as JWTError
 import pg8000
 from app.core.config import settings
 from app.core.security import ALGORITHM
@@ -35,19 +36,14 @@ def get_db_connection():
         return None
 
     try:
-        # A. GCP Cloud SQL 커넥터 활용 연결 시도 (배포 환경)
+        # A. GCP Cloud SQL UNIX 소켓 직접 연결 시도 (배포 환경 - 무겁고 에러가 잦은 Connector 제거 후 UNIX 소켓 직연결!)
         if cloud_sql_conn and not cloud_sql_conn.startswith("your-"):
-            from google.cloud.sql.connector import Connector
-            if _connector is None:
-                _connector = Connector()
-            
-            print(f"[deps] GCP Cloud SQL Connector 연결 기동: {cloud_sql_conn}")
-            conn = _connector.connect(
-                cloud_sql_conn,
-                "pg8000",
+            print(f"[deps] GCP Cloud SQL UNIX 소켓 연결 기동: /cloudsql/{cloud_sql_conn}/.s.PGSQL.5432")
+            conn = pg8000.dbapi.connect(
+                unix_sock=f"/cloudsql/{cloud_sql_conn}/.s.PGSQL.5432",
                 user=db_user,
                 password=db_pass,
-                db=db_name
+                database=db_name
             )
             return conn
 
