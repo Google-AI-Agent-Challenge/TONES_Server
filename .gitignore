@@ -91,6 +91,7 @@ env/
 # local env files
 .env
 .env*.local
+.env*.yaml
 
 # Sentry config
 .sentry-cli/
