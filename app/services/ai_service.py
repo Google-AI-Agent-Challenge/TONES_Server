@@ -4,8 +4,8 @@ from app.schemas.ai_search import SearchRequest, SearchResultItem, GenerateReque
 
 
 class AIService:
-    def __init__(self, pinecone_client=None):
-        self.pinecone = pinecone_client
+    def __init__(self, db_conn=None):
+        self.conn = db_conn
 
     def _get_gemini_embedding(self, text: str) -> list[float] | None:
         """
@@ -40,37 +40,68 @@ class AIService:
         # 1. 쿼리 텍스트를 벡터 임베딩으로 변환
         query_vector = self._get_gemini_embedding(request.query)
 
-        # 2. Pinecone 클라이언트 및 임베딩 벡터가 유효한 경우 실제 검색 수행
-        if self.pinecone is not None and query_vector is not None:
+        # 2. GCP Cloud SQL PostgreSQL + pgvector를 활용한 실시간 시맨틱 RAG 검색 수행
+        if self.conn is not None and query_vector is not None:
             try:
-                # 인덱스 이름에 URL이 포함되어 있을 경우 host 매개변수 사용, 그렇지 않으면 name 매개변수 사용
-                if settings.PINECONE_INDEX_NAME.startswith("http"):
-                    index = self.pinecone.Index(host=settings.PINECONE_INDEX_NAME)
-                else:
-                    index = self.pinecone.Index(name=settings.PINECONE_INDEX_NAME)
+                cursor = self.conn.cursor()
+                vector_str = f"[{','.join(map(str, query_vector))}]"
                 
-                # 시맨틱 벡터 쿼리 실행
-                response = index.query(
-                    vector=query_vector,
-                    top_k=request.top_k,
-                    include_metadata=True,
-                    filter=request.filter
-                )
+                # 동적 필터 조건 수립 (예: {"product_id": "xxx"})
+                where_clauses = ["embedding IS NOT NULL"]
+                params = [vector_str]
                 
-                matches = response.get("matches", [])
+                if request.filter and "product_id" in request.filter:
+                    where_clauses.append("product_id = %s")
+                    params.append(request.filter["product_id"])
+                
+                where_str = f"WHERE {' AND '.join(where_clauses)}"
+                
+                # pgvector 코사인 거리 연산자(<=>) 기반 시맨틱 검색 쿼리 작성 (ASC 정렬 시 유사도가 높은 순)
+                sql = f"""
+                    SELECT id, review_text, rating, review_date, sentiment, issue_type, ai_summary,
+                           (1 - (embedding <=> %s::vector)) AS similarity
+                    FROM public.reviews
+                    {where_str}
+                    ORDER BY embedding <=> %s::vector ASC
+                    LIMIT %s
+                """
+                
+                params.extend([vector_str, request.top_k])
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+                cursor.close()
+                
                 results = []
-                for match in matches:
+                for row in rows:
+                    review_id = str(row[0])
+                    review_text = row[1]
+                    rating = row[2]
+                    review_date = str(row[3])
+                    sentiment = str(row[4])
+                    issue_type = row[5] or ""
+                    ai_summary = row[6] or ""
+                    score = float(row[7] or 0.0)
+                    
                     results.append(
                         SearchResultItem(
-                            id=match.get("id"),
-                            score=match.get("score", 0.0),
-                            metadata=match.get("metadata") or {}
+                            id=review_id,
+                            score=score,
+                            metadata={
+                                "review_text": review_text,
+                                "rating": rating,
+                                "review_date": review_date,
+                                "sentiment": sentiment,
+                                "issue_type": issue_type,
+                                "ai_summary": ai_summary
+                            }
                         )
                     )
-                print(f"[AIService] Pinecone 벡터 검색 성공: {len(results)}개 결과 반환")
+                
+                print(f"[AIService] Cloud SQL pgvector 시맨틱 검색 성공: {len(results)}개 결과 반환")
                 return results
+                
             except Exception as e:
-                print(f"[AIService] Pinecone 검색 실패 (오프라인 폴백 진행): {e}")
+                print(f"[AIService] Cloud SQL pgvector 시맨틱 검색 실패 (오프라인 폴백 진행): {e}")
 
         # 3. 오프라인 폴백 처리: 키가 없거나 실패한 경우 더미 결과 반환
         print("[AIService] 오프라인 폴백: 더미 시맨틱 검색 결과를 생성합니다.")
@@ -141,54 +172,17 @@ class AIService:
 
     def upsert_review_vector(self, review_id: str, text: str, metadata: dict) -> bool:
         """
-        리뷰 텍스트를 임베딩 벡터로 변환하여 Pinecone 벡터 DB에 업로드
+        GCP 통합 아키텍처 개편에 따른 레거시 어댑터 호환용 빈 메서드.
+        (리뷰 데이터와 임베딩은 이제 단일 Cloud SQL PostgreSQL 트랜잭션 내에서 한꺼번에 원자적 저장되므로 이 별도 업로드는 패스합니다.)
         """
-        vector = self._get_gemini_embedding(text)
-        if vector is None:
-            # 768차원 더미 벡터 생성 (로컬/오프라인 테스트용)
-            print(f"[AIService] 임베딩 호출 실패, 로컬 768차원 더미 벡터 사용: {review_id}")
-            # 테스트 및 오프라인 환경용 768차원 더미 리스트
-            if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY.startswith("your-"):
-                vector = [0.01] * 768
-
-        if self.pinecone is not None and vector is not None:
-            try:
-                if settings.PINECONE_INDEX_NAME.startswith("http"):
-                    index = self.pinecone.Index(host=settings.PINECONE_INDEX_NAME)
-                else:
-                    index = self.pinecone.Index(name=settings.PINECONE_INDEX_NAME)
-                
-                # Pinecone upsert
-                index.upsert(vectors=[(review_id, vector, metadata)])
-                print(f"[AIService] Pinecone 적재 성공: {review_id}")
-                return True
-            except Exception as e:
-                print(f"[AIService] Pinecone 적재 실패: {e}")
-                return False
-        else:
-            print(f"[AIService] Pinecone 미설정/오프라인 모드, 적재 건너뜀 (더미 성공 처리): {review_id}")
-            return True
+        return True
 
     def delete_review_vector(self, review_id: str) -> bool:
         """
-        데이터 일관성 보장을 위해 Pinecone에서 벡터 삭제 (롤백 정책용)
+        GCP 통합 아키텍처 개편에 따른 레거시 어댑터 호환용 빈 메서드.
+        (Cloud SQL 트랜잭션 롤백 시 DB 레코드와 pgvector 데이터가 자동 동시 롤백되므로 이 별도 삭제는 패스합니다.)
         """
-        if self.pinecone is not None:
-            try:
-                if settings.PINECONE_INDEX_NAME.startswith("http"):
-                    index = self.pinecone.Index(host=settings.PINECONE_INDEX_NAME)
-                else:
-                    index = self.pinecone.Index(name=settings.PINECONE_INDEX_NAME)
-                
-                index.delete(ids=[review_id])
-                print(f"[AIService] Pinecone 벡터 롤백(삭제) 성공: {review_id}")
-                return True
-            except Exception as e:
-                print(f"[AIService] Pinecone 벡터 삭제 실패: {e}")
-                return False
-        else:
-            print(f"[AIService] Pinecone 미설정/오프라인 모드, 삭제 건너뜀: {review_id}")
-            return True
+        return True
 
     def analyze_review_absa(self, review_text: str) -> dict:
         """
@@ -472,5 +466,3 @@ class AIService:
             elif rating_diff < 0:
                 rating_comment = "일시적인 미세 평점 하락"
             return f"ℹ️ 최근 1주일간 {product_name} 제품의 통계 분석 결과, 평점이 {rating_comment}를 보이며 3대 핵심 속성 모두 균형 잡힌 만족도를 나타내고 있습니다."
-
-

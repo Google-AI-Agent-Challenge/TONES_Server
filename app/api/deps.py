@@ -1,8 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from supabase import create_client, Client
-from pinecone import Pinecone
+import pg8000
 from app.core.config import settings
 from app.core.security import ALGORITHM
 from app.schemas.auth import TokenPayload
@@ -14,52 +13,93 @@ oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login/access-token"
 )
 
-_supabase_client: Client | None = None
-_pinecone_client: Pinecone | None = None
+_connector = None
 
+def get_db_connection():
+    """
+    GCP Cloud SQL Python Connector 또는 직접 pg8000을 활용해 PostgreSQL 커넥션 반환.
+    안전한 릴리즈를 위해 settings에 해당 속성이 없을 경우 getattr 및 기본값 폴백 처리를 적용합니다.
+    """
+    global _connector
 
-def get_supabase_client() -> Client | None:
-    global _supabase_client
-    if _supabase_client is None:
-        try:
-            _supabase_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-        except Exception as e:
-            print(f"Supabase 클라이언트 생성 실패 (더미 설정 모드 활성): {e}")
-            _supabase_client = None
-    return _supabase_client
+    # 1. 설정 변수 안전 획득 (GCP 및 로컬 연결 설정 대응)
+    db_name = getattr(settings, "DB_NAME", None) or getattr(settings, "SUPABASE_URL", "").split("/")[-1].split("?")[0]
+    db_user = getattr(settings, "DB_USER", "postgres")
+    db_pass = getattr(settings, "DB_PASS", None) or getattr(settings, "SUPABASE_KEY", None)
+    db_host = getattr(settings, "DB_HOST", None)
+    db_port = getattr(settings, "DB_PORT", 5432)
+    cloud_sql_conn = getattr(settings, "CLOUD_SQL_CONNECTION_NAME", None)
 
+    if not db_name or db_name.startswith("your-"):
+        print("[deps] GCP 데이터베이스 연결 변수가 설정되지 않았습니다. (오프라인 모킹 활성)")
+        return None
 
-def get_pinecone_client() -> Pinecone | None:
-    global _pinecone_client
-    if _pinecone_client is None:
-        try:
-            if settings.PINECONE_API_KEY and not settings.PINECONE_API_KEY.startswith("your-"):
-                _pinecone_client = Pinecone(api_key=settings.PINECONE_API_KEY)
-            else:
-                _pinecone_client = None
-        except Exception as e:
-            print(f"Pinecone 클라이언트 생성 실패 (더미 설정 모드 활성): {e}")
-            _pinecone_client = None
-    return _pinecone_client
+    try:
+        # A. GCP Cloud SQL 커넥터 활용 연결 시도 (배포 환경)
+        if cloud_sql_conn and not cloud_sql_conn.startswith("your-"):
+            from google.cloud.sql.connector import Connector
+            if _connector is None:
+                _connector = Connector()
+            
+            print(f"[deps] GCP Cloud SQL Connector 연결 기동: {cloud_sql_conn}")
+            conn = _connector.connect(
+                cloud_sql_conn,
+                "pg8000",
+                user=db_user,
+                password=db_pass,
+                db=db_name
+            )
+            return conn
+
+        # B. 로컬 PostgreSQL 및 직접 TCP IP 기반 연결 시도
+        elif db_host and not db_host.startswith("your-"):
+            print(f"[deps] 로컬/원격 PostgreSQL 직접 연결 시도: {db_host}:{db_port}")
+            conn = pg8000.dbapi.connect(
+                host=db_host,
+                port=int(db_port),
+                user=db_user,
+                password=db_pass,
+                database=db_name
+            )
+            return conn
+
+        # C. Supabase 연결 URL 파싱을 통한 마이그레이션 과도기 지원 폴백
+        elif getattr(settings, "SUPABASE_URL", None) and "supabase.co" in settings.SUPABASE_URL:
+            # supabase.co 호스트 파싱
+            sb_host = settings.SUPABASE_URL.replace("https://", "").replace("http://", "").split("/")[0]
+            sb_db_host = f"db.{sb_host}"
+            print(f"[deps] 과도기 Supabase 직접 DB TCP 연결 시도: {sb_db_host}")
+            conn = pg8000.dbapi.connect(
+                host=sb_db_host,
+                port=5432,
+                user="postgres",
+                password=db_pass,
+                database="postgres"
+            )
+            return conn
+
+    except Exception as e:
+        print(f"[deps] 데이터베이스 연결 실패 (오프라인 Mocking 모드 폴백 작동): {e}")
+
+    return None
 
 
 def get_user_service(
-    supabase_client: Client | None = Depends(get_supabase_client)
+    db_conn = Depends(get_db_connection)
 ) -> UserService:
-    return UserService(supabase_client)
+    return UserService(db_conn)
 
 
 def get_ai_service(
-    pinecone_client: Pinecone | None = Depends(get_pinecone_client)
+    db_conn = Depends(get_db_connection)
 ) -> AIService:
-    return AIService(pinecone_client)
+    return AIService(db_conn)
 
 
 def get_dashboard_service(
-    supabase_client: Client | None = Depends(get_supabase_client)
+    db_conn = Depends(get_db_connection)
 ) -> DashboardService:
-    return DashboardService(supabase_client)
-
+    return DashboardService(db_conn)
 
 
 def get_current_user() -> dict:

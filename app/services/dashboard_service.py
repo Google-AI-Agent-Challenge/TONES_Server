@@ -1,8 +1,8 @@
 import uuid
 import re
+import time
 from typing import List, Optional
 from datetime import datetime, timedelta
-from supabase import Client
 from app.schemas.dashboard import ReviewCreate
 from app.services.ai_service import AIService
 
@@ -130,47 +130,127 @@ MOCK_REVIEWS = [
     }
 ]
 
+
 class DashboardService:
-    def __init__(self, supabase_client: Client | None):
-        self.supabase = supabase_client
+    def __init__(self, db_conn=None):
+        self.conn = db_conn
         self._stats_cache = {}  # TTL 캐시 보관소: {(product_id, period_days): (timestamp, stats_data)}
 
+    def _parse_db_row_to_review(self, row) -> dict:
+        """
+        SQL Query 결과 Tuple 데이터를 Schema에 맞는 딕셔너리로 안전하게 포맷팅
+        """
+        # products JOIN 컬럼 파싱 (row[17]~row[21])
+        prod_obj = None
+        if len(row) > 17 and row[17] is not None:
+            prod_obj = {
+                "id": str(row[17]),
+                "brand_name": row[18],
+                "product_name": row[19],
+                "category": row[20],
+                "target_skin": row[21]
+            }
+
+        return {
+            "id": str(row[0]),
+            "product_id": str(row[1]),
+            "source": row[2],
+            "reviewer_type": row[3],
+            "review_text": row[4],
+            "rating": int(row[5]),
+            "review_date": str(row[6]),
+            "sentiment": str(row[7]),
+            "sentiment_score": float(row[8]) if row[8] is not None else None,
+            "keywords": list(row[9]) if row[9] is not None else [],
+            "issue_type": row[10],
+            "ai_summary": row[11],
+            "created_at": str(row[12]) if row[12] is not None else None,
+            "review_id": str(row[13]) if row[13] is not None else None,
+            "score_ingredients": float(row[14]) if row[14] is not None else 0.5,
+            "score_formulation": float(row[15]) if row[15] is not None else 0.5,
+            "score_container": float(row[16]) if row[16] is not None else 0.5,
+            "products": prod_obj
+        }
+
     def fetch_products(self) -> List[dict]:
-        if self.supabase is not None:
+        if self.conn is not None:
             try:
-                response = self.supabase.table("products").select("id, brand_name, product_name, category, target_skin, created_at").order("product_name", desc=False).execute()
-                if response.data:
-                    return response.data
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    SELECT id, brand_name, product_name, category, target_skin, created_at 
+                    FROM public.products 
+                    ORDER BY product_name ASC
+                """)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [{
+                    "id": str(r[0]),
+                    "brand_name": r[1],
+                    "product_name": r[2],
+                    "category": r[3],
+                    "target_skin": r[4],
+                    "created_at": str(r[5]) if r[5] is not None else None
+                } for r in rows]
             except Exception as e:
-                print(f"[DashboardService.fetch_products] Supabase fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
+                print(f"[DashboardService.fetch_products] Cloud SQL fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
         return MOCK_PRODUCTS
 
     def fetch_latest_reviews(self, limit: int = 20) -> List[dict]:
-        if self.supabase is not None:
+        if self.conn is not None:
             try:
-                response = self.supabase.table("reviews").select(
-                    "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).order("review_date", desc=True).limit(limit).execute()
-                if response.data:
-                    return response.data
+                cursor = self.conn.cursor()
+                sql = """
+                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
+                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
+                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    FROM public.reviews r
+                    LEFT JOIN public.products p ON r.product_id = p.id
+                    ORDER BY r.review_date DESC, r.created_at DESC
+                    LIMIT %s
+                """
+                cursor.execute(sql, [limit])
+                rows = cursor.fetchall()
+                cursor.close()
+                return [self._parse_db_row_to_review(r) for r in rows]
             except Exception as e:
-                print(f"[DashboardService.fetch_latest_reviews] Supabase fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
+                print(f"[DashboardService.fetch_latest_reviews] Cloud SQL fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
         return MOCK_REVIEWS[:limit]
 
     def fetch_reviews_by_keywords(self, keywords: List[str], limit: int = 20) -> List[dict]:
         if not keywords:
             return self.fetch_latest_reviews(limit)
 
-        if self.supabase is not None:
+        if self.conn is not None:
             try:
-                or_filter = ",".join([f"review_text.ilike.%{kw}%" for kw in keywords])
-                response = self.supabase.table("reviews").select(
-                    "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).or_(or_filter).order("review_date", desc=True).limit(limit).execute()
-                if response.data:
-                    return response.data
+                cursor = self.conn.cursor()
+                
+                # 동적 LIKE 검색 조건 수립
+                where_clauses = []
+                params = []
+                for kw in keywords:
+                    where_clauses.append("r.review_text ILIKE %s")
+                    params.append(f"%{kw}%")
+                
+                where_str = f"WHERE {' OR '.join(where_clauses)}"
+                sql = f"""
+                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
+                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
+                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    FROM public.reviews r
+                    LEFT JOIN public.products p ON r.product_id = p.id
+                    {where_str}
+                    ORDER BY r.review_date DESC, r.created_at DESC
+                    LIMIT %s
+                """
+                params.append(limit)
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [self._parse_db_row_to_review(r) for r in rows]
             except Exception as e:
-                print(f"[DashboardService.fetch_reviews_by_keywords] Supabase fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
+                print(f"[DashboardService.fetch_reviews_by_keywords] Cloud SQL fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
 
         # Local mock filter
         filtered = []
@@ -185,33 +265,113 @@ class DashboardService:
         return filtered[:limit] if filtered else MOCK_REVIEWS[:limit]
 
     def fetch_reviews_by_product(self, product_id: str, limit: int = 20) -> List[dict]:
-        if self.supabase is not None:
+        if self.conn is not None:
             try:
-                response = self.supabase.table("reviews").select(
-                    "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).eq("product_id", product_id).order("review_date", desc=True).limit(limit).execute()
-                if response.data:
-                    return response.data
+                cursor = self.conn.cursor()
+                sql = """
+                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
+                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
+                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    FROM public.reviews r
+                    LEFT JOIN public.products p ON r.product_id = p.id
+                    WHERE r.product_id = %s
+                    ORDER BY r.review_date DESC, r.created_at DESC
+                    LIMIT %s
+                """
+                cursor.execute(sql, [product_id, limit])
+                rows = cursor.fetchall()
+                cursor.close()
+                return [self._parse_db_row_to_review(r) for r in rows]
             except Exception as e:
-                print(f"[DashboardService.fetch_reviews_by_product] Supabase fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
+                print(f"[DashboardService.fetch_reviews_by_product] Cloud SQL fetch 실패, 로컬 Mock 데이터로 폴백: {e}")
 
         # Local mock filter
         filtered = [r for r in MOCK_REVIEWS if r["product_id"] == product_id]
         return filtered[:limit] if filtered else MOCK_REVIEWS[:limit]
 
+    def fetch_reviews_by_ids(self, ids: List[str]) -> List[dict]:
+        if not ids:
+            return []
+        if self.conn is not None:
+            try:
+                cursor = self.conn.cursor()
+                # PostgreSQL ANY 구문 또는 동적 플레이스홀더를 활용한 ID 리스트 매칭
+                placeholders = ",".join(["%s"] * len(ids))
+                sql = f"""
+                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
+                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
+                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    FROM public.reviews r
+                    LEFT JOIN public.products p ON r.product_id = p.id
+                    WHERE r.id IN ({placeholders})
+                    ORDER BY r.review_date DESC, r.created_at DESC
+                """
+                cursor.execute(sql, ids)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [self._parse_db_row_to_review(r) for r in rows]
+            except Exception as e:
+                print(f"[DashboardService.fetch_reviews_by_ids] Cloud SQL fetch 실패: {e}")
+        # 오프라인 폴백
+        filtered = [r for r in MOCK_REVIEWS if r["id"] in ids]
+        return filtered
+
+    def save_layout(self, user_token: str, pinned_widget: str | None) -> bool:
+        if self.conn is not None:
+            try:
+                cursor = self.conn.cursor()
+                sql = """
+                    INSERT INTO public.user_layouts (user_token, pinned_widget, updated_at)
+                    VALUES (%s, %s, timezone('utc'::text, now()))
+                    ON CONFLICT (user_token) 
+                    DO UPDATE SET pinned_widget = EXCLUDED.pinned_widget, updated_at = timezone('utc'::text, now())
+                """
+                cursor.execute(sql, [user_token, pinned_widget])
+                self.conn.commit()
+                cursor.close()
+                return True
+            except Exception as e:
+                print(f"[DashboardService.save_layout] Cloud SQL upsert 실패: {e}")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                return False
+        return True
+
+    def load_layout(self, user_token: str) -> str | None:
+        if self.conn is not None:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "SELECT pinned_widget FROM public.user_layouts WHERE user_token = %s",
+                    [user_token]
+                )
+                row = cursor.fetchone()
+                cursor.close()
+                if row:
+                    return row[0]
+            except Exception as e:
+                print(f"[DashboardService.load_layout] Cloud SQL fetch 실패: {e}")
+                return None
+        return None
+
     async def process_and_save_reviews(self, reviews: List[ReviewCreate], ai_service: AIService) -> dict:
         """
-        크롤링 리뷰 AI 분석 파이프라인 통합 적재 트랜잭션 메서드
+        크롤링 리뷰 AI 분석 및 GCP Cloud SQL + pgvector 통합 적재 트랜잭션 메서드 (원자적 성공 보장)
         1. 원시 리뷰에 대해 ABSA 엔진 구동
-        2. Pinecone 벡터 임베딩 생성 및 upsert
-        3. Supabase DB 적재 (자가 치유 및 롤백 정책 적용)
+        2. Gemini Embedding API를 통해 텍스트 벡터 추출
+        3. Cloud SQL PostgreSQL에 단일 트랜잭션으로 RDBMS 데이터와 벡터를 동시에 완벽히 밀어넣음!
+           (Supabase 적재 실패 시 Pinecone을 수동 롤백하던 구식 분산 복잡성은 이제 RDBMS rollback() 한 줄로 해결!)
         """
         success_count = 0
         failure_count = 0
         processed_ids = []
 
         for review in reviews:
-            # 1. 고유 ID 생성 (UUID 검증 포함)
+            # 고유 ID 생성 (UUID 검증 및 deterministic UUID5 지원)
             try:
                 review_id_val = str(uuid.UUID(review.review_id)) if review.review_id else str(uuid.uuid4())
             except Exception:
@@ -220,27 +380,20 @@ class DashboardService:
             row_uuid = str(uuid.uuid4())
 
             try:
-                # 2. Gemini ABSA 엔진 실행
+                # 1. Gemini ABSA 감성 분석 엔진 실행
                 absa_res = ai_service.analyze_review_absa(review.content)
 
-                # 3. Pinecone 벡터 DB 적재용 메타데이터 빌드 및 업로드
-                metadata = {
-                    "product_id": review.product_id,
-                    "source": review.source,
-                    "rating": review.rating,
-                    "review_date": review.review_date or datetime.now().date().isoformat(),
-                    "sentiment": absa_res["overall_sentiment"],
-                    "issue_type": absa_res["issue_type"],
-                    "ai_summary": absa_res["ai_summary"]
-                }
+                # 2. RAG 적재를 위한 Gemini 768차원 임베딩 추출
+                query_vector = ai_service._get_gemini_embedding(review.content)
+                if query_vector is None:
+                    # 임베딩 에러 상황 시 768차원 임시 더미 벡터 주입 (로컬 / 오프라인 가용성 보장)
+                    query_vector = [0.01] * 768
                 
-                # Pinecone upsert 수행
-                upsert_ok = ai_service.upsert_review_vector(row_uuid, review.content, metadata)
-                if not upsert_ok:
-                    print(f"[DashboardService] Pinecone 벡터 적재 오류 발생 (건너뜀 또는 에러 처리): {row_uuid}")
+                # pgvector 직렬화 텍스트 포맷 빌드 (예: "[0.12, 0.34, ...]")
+                vector_str = f"[{','.join(map(str, query_vector))}]"
 
-                # 4. Supabase DB 적재 레코드 빌드
-                supabase_record = {
+                # 3. Cloud SQL DB 적재용 Record 빌드
+                sql_record = {
                     "id": row_uuid,
                     "product_id": review.product_id,
                     "source": review.source,
@@ -254,49 +407,83 @@ class DashboardService:
                     "issue_type": absa_res["issue_type"],
                     "ai_summary": absa_res["ai_summary"],
                     "review_id": review_id_val,
+                    "embedding": vector_str,
                     "score_ingredients": absa_res["ingredients_skin_concerns_score"],
                     "score_formulation": absa_res["formulation_spreadability_score"],
                     "score_container": absa_res["container_design_score"]
                 }
 
-                # 5. Supabase 트랜잭션 수행 (자가 치유 및 롤백 패턴 적용)
-                if self.supabase is not None:
+                # 4. 단일 DB 트랜잭션 수행 (자가 치유(Self-Healing) 및 완벽한 동시 롤백 내장)
+                if self.conn is not None:
                     try:
-                        # [시도 1] 개별 컬럼(score_ingredients 등)을 포함하여 인서트 시도
-                        self.supabase.table("reviews").insert(supabase_record).execute()
-                        print(f"[DashboardService] Supabase 적재 성공 (개별 컬럼 포함): {row_uuid}")
+                        cursor = self.conn.cursor()
+                        # [시도 1] 개별 감성 점수 컬럼 및 임베딩 벡터를 모두 포함하여 단일 인서트 시도
+                        sql = """
+                            INSERT INTO public.reviews (
+                                id, product_id, source, reviewer_type, review_text, rating, review_date, 
+                                sentiment, sentiment_score, keywords, issue_type, ai_summary, review_id, 
+                                embedding, score_ingredients, score_formulation, score_container
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::sentiment_type, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
+                        """
+                        cursor.execute(sql, [
+                            sql_record["id"], sql_record["product_id"], sql_record["source"], sql_record["reviewer_type"],
+                            sql_record["review_text"], sql_record["rating"], sql_record["review_date"],
+                            sql_record["sentiment"], sql_record["sentiment_score"], sql_record["keywords"],
+                            sql_record["issue_type"], sql_record["ai_summary"], sql_record["review_id"],
+                            sql_record["embedding"], sql_record["score_ingredients"],
+                            sql_record["score_formulation"], sql_record["score_container"]
+                        ])
+                        self.conn.commit()
+                        cursor.close()
+                        print(f"[DashboardService] Cloud SQL pgvector 원자적 적재 성공: {row_uuid}")
                     except Exception as e:
-                        # [시도 2] 자가 치유(Self-Healing) 작동: 컬럼 누락 시 구조화 패키징
+                        try:
+                            self.conn.rollback()
+                        except Exception:
+                            pass
+                        
                         error_str = str(e)
-                        if "column" in error_str or "does not exist" in error_str or "404" in error_str:
-                            print(f"[DashboardService] 개별 감성 점수 컬럼 누락 감지, 자가 치유(Self-Healing) 실행: {e}")
+                        # [시도 2] 자가 치유(Self-Healing) 작동: 컬럼 누락 혹은 pgvector 미설치 시 텍스트 전용 패키징 폴백 시도
+                        if "column" in error_str or "does not exist" in error_str or "404" in error_str or "vector" in error_str:
+                            print(f"[DashboardService] 감성 점수 또는 벡터 컬럼 누락 감지, Self-Healing 실행: {e}")
                             scores_formatted = (
                                 f"[성분/고민]: {absa_res['ingredients_skin_concerns_score']:.2f} | "
                                 f"[제형/발림]: {absa_res['formulation_spreadability_score']:.2f} | "
                                 f"[용기/디자인]: {absa_res['container_design_score']:.2f}"
                             )
-                            healed_record = supabase_record.copy()
-                            healed_record["ai_summary"] = f"{scores_formatted} \n요약: {absa_res['ai_summary']}"
-                            
-                            # 오류 방지용 속성 점수 필드들 제외
-                            healed_record.pop("score_ingredients", None)
-                            healed_record.pop("score_formulation", None)
-                            healed_record.pop("score_container", None)
+                            healed_summary = f"{scores_formatted} \n요약: {absa_res['ai_summary']}"
                             
                             try:
-                                self.supabase.table("reviews").insert(healed_record).execute()
-                                print(f"[DashboardService] 자가 치유된 레코드 Supabase 적재 성공: {row_uuid}")
+                                cursor = self.conn.cursor()
+                                # 임베딩 및 보완 점수 필드를 제외하고 핵심 텍스트 컬럼만으로 DB 저장 시도
+                                fallback_sql = """
+                                    INSERT INTO public.reviews (
+                                        id, product_id, source, reviewer_type, review_text, rating, review_date, 
+                                        sentiment, sentiment_score, keywords, issue_type, ai_summary, review_id
+                                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::sentiment_type, %s, %s, %s, %s, %s)
+                                """
+                                cursor.execute(fallback_sql, [
+                                    sql_record["id"], sql_record["product_id"], sql_record["source"], sql_record["reviewer_type"],
+                                    sql_record["review_text"], sql_record["rating"], sql_record["review_date"],
+                                    sql_record["sentiment"], sql_record["sentiment_score"], sql_record["keywords"],
+                                    sql_record["issue_type"], healed_summary, sql_record["review_id"]
+                                ])
+                                self.conn.commit()
+                                cursor.close()
+                                print(f"[DashboardService] 자가 치유된 레코드 Cloud SQL 적재 성공: {row_uuid}")
                             except Exception as final_err:
-                                print(f"[DashboardService] 자가 치유 후 최종 DB 적재 실패로 Pinecone 롤백 실행: {final_err}")
-                                ai_service.delete_review_vector(row_uuid)
+                                try:
+                                    self.conn.rollback()
+                                except Exception:
+                                    pass
+                                print(f"[DashboardService] 자가 치유 최종 DB 적재 실패 (건너뜀): {final_err}")
                                 raise final_err
                         else:
-                            print(f"[DashboardService] Supabase 기타 DB 오류 발생으로 Pinecone 롤백 실행: {e}")
-                            ai_service.delete_review_vector(row_uuid)
+                            print(f"[DashboardService] Cloud SQL 기타 데이터베이스 트랜잭션 오류 발생: {e}")
                             raise e
                 else:
                     # 오프라인 및 로컬 테스트 환경 시뮬레이션
-                    print(f"[DashboardService] Supabase 미설정 상태, 가상 메모리 적재 처리: {row_uuid}")
+                    print(f"[DashboardService] Cloud SQL 미설정 상태, 가상 메모리 적재 처리: {row_uuid}")
                     mock_record = {
                         "id": row_uuid,
                         "product_id": review.product_id,
@@ -366,16 +553,14 @@ class DashboardService:
                 rating = review_dict.get("rating", 3)
                 text = review_dict.get("review_text") or review_dict.get("content") or ""
                 
-                # 평점별 기본 감성 점수 매핑 (화장품 만족도 특성에 맞춘 차별화된 베이스라인 배정)
-                # 용기/디자인은 일반적으로 Tweezers(집게) 유실/액샘 불만이 많으므로 상대적으로 낮게 시작
                 ing_base = 0.50
                 form_base = 0.50
                 cont_base = 0.50
 
                 if rating == 5:
                     ing_base = 0.88
-                    form_base = 0.94  # 제형/발림성은 5점 리뷰에서 극찬 비율이 매우 높음
-                    cont_base = 0.74  # 5점이어도 용기에 대한 불만은 잠재되어 있는 편
+                    form_base = 0.94
+                    cont_base = 0.74
                 elif rating == 4:
                     ing_base = 0.72
                     form_base = 0.80
@@ -397,29 +582,25 @@ class DashboardService:
                 form_score = form_base
                 cont_score = cont_base
 
-                # 확장된 긍정/부정 키워드 사전 (한국어 화장품 VOC 특화)
                 ing_pos = ["순해", "순하고", "자극 없", "자극없", "진정", "트러블 안", "여드름 안", "붉은기", "완화", "개선", "피부결", "진정에", "안심", "트러블성"]
-                ing_neg = ["트러블", "뒤집", "자극", "여드름", "간지러", "따가", "붉어", "좁쌀", "붉어지", "가렵", "간지", "좁쌀여드름", "피부 뒤집", "뒤집어", "화끈", "자극감"]
+                ing_neg = ["트러블", "뒤집", "자극", "여드름", "간지러", "따가", "붉", "좁쌀", "붉어지", "가렵", "간지", "좁쌀여드름", "피부 뒤집", "뒤집어", "화끈", "자극감"]
                 
-                form_pos = ["촉촉", "발림", "제형", "두께", "밀착", "보습", "에센스 많", "충분", "부드러", "닦토", "흡수", "수분감", "밀착력", "두툼", "패드 부드", "닦기 편", "닦토", "부드러운"]
-                form_neg = ["끈적", "밀려", "두껍", "거칠", "건조", "보풀", "찢어", "얇아", "흡수 안", "푸석", "끈적", "밀림", "보풀", "찢어짐", "거칠", "에센스 부족", "말라"]
+                form_pos = ["촉촉", "발림", "제형", "두께", "밀착", "보습", "에센스 많", "충분", "부드러", "닦토", "흡수", "수분감", "밀착력", "두툼", "패드 부드", "닦기 편", "부드러운"]
+                form_neg = ["끈적", "밀려", "두껍", "거칠", "건조", "보풀", "찢어", "얇아", "흡수 안", "푸석", "밀림", "보풀", "찢어짐", "에센스 부족", "말라"]
 
                 cont_pos = ["용기", "디자인", "집게", "위생", "뚜껑", "패키지", "예뻐", "편리"]
                 cont_neg = ["불편", "새요", "샘", "집게 불편", "뚜껑 불편", "새고", "흐르고", "위생적이지", "집게 분실", "뚜껑 잘 안"]
 
-                # 성분/고민 점수 미세조정 (가중치 상향하여 변동폭 확대)
                 if any(k in text for k in ing_pos):
                     ing_score = min(0.96, ing_score + 0.12)
                 if any(k in text for k in ing_neg):
                     ing_score = max(0.04, ing_score - 0.22)
 
-                # 제형/발림 점수 미세조정
                 if any(k in text for k in form_pos):
                     form_score = min(0.96, form_score + 0.12)
                 if any(k in text for k in form_neg):
                     form_score = max(0.04, form_score - 0.22)
 
-                # 용기/디자인 점수 미세조정
                 if any(k in text for k in cont_pos):
                     cont_score = min(0.96, cont_score + 0.12)
                 if any(k in text for k in cont_neg):
@@ -499,7 +680,6 @@ class DashboardService:
         """
         today = datetime.now().date()
         start_date_this_week = today - timedelta(days=period_days)
-        # WoW 이전 비교 기간
         start_date_last_week = today - timedelta(days=2 * period_days)
 
         reviews_this = []
@@ -529,8 +709,6 @@ class DashboardService:
         """
         통합 통계 서빙 및 캐싱 서비스 레이어 메서드 (주간 대비 WoW 감지 및 Gemini 요약 포함)
         """
-        import time
-        
         # 1. 인메모리 TTL 캐시 확인 (60초 만료 시간 적용)
         cache_key = (product_id, period_days)
         if cache_key in self._stats_cache:
@@ -539,33 +717,68 @@ class DashboardService:
                 print(f"[DashboardService] 캐시 히트 (TTL 60s): {cache_key}")
                 return cached_data
 
-        # 2. Supabase에서 해당 제품의 리뷰 기간별 조회
+        # 2. Cloud SQL에서 해당 제품의 리뷰 기간별 조회
         reviews_this = []
         reviews_last = []
         
-        if self.supabase is not None:
+        if self.conn is not None:
             try:
+                cursor = self.conn.cursor()
                 today = datetime.now().date()
                 start_date_this_week = (today - timedelta(days=period_days)).isoformat()
                 start_date_last_week = (today - timedelta(days=2 * period_days)).isoformat()
 
-                # 이번 기간
-                query_this = self.supabase.table("reviews").select("*").gte("review_date", start_date_this_week)
+                # 이번 기간 리뷰 로드
+                sql_this = """
+                    SELECT id, product_id, source, reviewer_type, review_text, rating, review_date, 
+                           sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id,
+                           score_ingredients, score_formulation, score_container
+                    FROM public.reviews
+                    WHERE review_date >= %s
+                """
+                params_this = [start_date_this_week]
                 if product_id:
-                    query_this = query_this.eq("product_id", product_id)
-                res_this = query_this.execute()
-                reviews_this = res_this.data if res_this.data else []
+                    sql_this += " AND product_id = %s"
+                    params_this.append(product_id)
+                cursor.execute(sql_this, params_this)
+                rows_this = cursor.fetchall()
+                reviews_this = [{
+                    "id": str(r[0]), "product_id": str(r[1]), "source": r[2], "reviewer_type": r[3],
+                    "review_text": r[4], "rating": int(r[5]), "review_date": str(r[6]), "sentiment": str(r[7]),
+                    "sentiment_score": float(r[8]) if r[8] is not None else None, "keywords": list(r[9]) if r[9] is not None else [],
+                    "issue_type": r[10], "ai_summary": r[11], "created_at": str(r[12]), "review_id": str(r[13]) if r[13] is not None else None,
+                    "score_ingredients": float(r[14]) if r[14] is not None else 0.5,
+                    "score_formulation": float(r[15]) if r[15] is not None else 0.5,
+                    "score_container": float(r[16]) if r[16] is not None else 0.5
+                } for r in rows_this]
 
-                # 지난 기간 (WoW)
-                query_last = self.supabase.table("reviews").select("*")\
-                    .gte("review_date", start_date_last_week)\
-                    .lt("review_date", start_date_this_week)
+                # 지난 기간 리뷰 로드 (WoW)
+                sql_last = """
+                    SELECT id, product_id, source, reviewer_type, review_text, rating, review_date, 
+                           sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id,
+                           score_ingredients, score_formulation, score_container
+                    FROM public.reviews
+                    WHERE review_date >= %s AND review_date < %s
+                """
+                params_last = [start_date_last_week, start_date_this_week]
                 if product_id:
-                    query_last = query_last.eq("product_id", product_id)
-                res_last = query_last.execute()
-                reviews_last = res_last.data if res_last.data else []
+                    sql_last += " AND product_id = %s"
+                    params_last.append(product_id)
+                cursor.execute(sql_last, params_last)
+                rows_last = cursor.fetchall()
+                cursor.close()
+                reviews_last = [{
+                    "id": str(r[0]), "product_id": str(r[1]), "source": r[2], "reviewer_type": r[3],
+                    "review_text": r[4], "rating": int(r[5]), "review_date": str(r[6]), "sentiment": str(r[7]),
+                    "sentiment_score": float(r[8]) if r[8] is not None else None, "keywords": list(r[9]) if r[9] is not None else [],
+                    "issue_type": r[10], "ai_summary": r[11], "created_at": str(r[12]), "review_id": str(r[13]) if r[13] is not None else None,
+                    "score_ingredients": float(r[14]) if r[14] is not None else 0.5,
+                    "score_formulation": float(r[15]) if r[15] is not None else 0.5,
+                    "score_container": float(r[16]) if r[16] is not None else 0.5
+                } for r in rows_last]
+
             except Exception as e:
-                print(f"[DashboardService] Supabase 통계 데이터 fetch 실패, 로컬 Mock 데이터 전환: {e}")
+                print(f"[DashboardService] Cloud SQL 통계 데이터 fetch 실패, 로컬 Mock 데이터 전환: {e}")
                 reviews_this, reviews_last = self._get_mock_reviews_split(product_id, period_days)
         else:
             reviews_this, reviews_last = self._get_mock_reviews_split(product_id, period_days)
@@ -577,11 +790,14 @@ class DashboardService:
         # 4. 상품명 탐색
         product_name = "전체 제품 합산"
         if product_id:
-            if self.supabase is not None:
+            if self.conn is not None:
                 try:
-                    p_res = self.supabase.table("products").select("name").eq("id", product_id).execute()
-                    if p_res.data:
-                        product_name = p_res.data[0]["name"]
+                    cursor = self.conn.cursor()
+                    cursor.execute("SELECT name FROM public.products WHERE id = %s", [product_id])
+                    row = cursor.fetchone()
+                    cursor.close()
+                    if row:
+                        product_name = row[0]
                 except Exception:
                     pass
             
@@ -610,45 +826,3 @@ class DashboardService:
         print(f"[DashboardService] 신규 캐시 저장 완료: {cache_key}")
         
         return statistics_response
-
-    def save_layout(self, user_token: str, pinned_widget: str | None) -> bool:
-        if self.supabase is not None:
-            try:
-                response = self.supabase.table("user_layouts").upsert(
-                    {"user_token": user_token, "pinned_widget": pinned_widget, "updated_at": datetime.now().isoformat()},
-                    on_conflict="user_token"
-                ).execute()
-                return True
-            except Exception as e:
-                print(f"[DashboardService.save_layout] Supabase upsert 실패: {e}")
-                return False
-        return True
-
-    def load_layout(self, user_token: str) -> str | None:
-        if self.supabase is not None:
-            try:
-                response = self.supabase.table("user_layouts").select("pinned_widget").eq("user_token", user_token).execute()
-                if response.data:
-                    return response.data[0].get("pinned_widget")
-            except Exception as e:
-                print(f"[DashboardService.load_layout] Supabase fetch 실패: {e}")
-                return None
-        return None
-
-    def fetch_reviews_by_ids(self, ids: List[str]) -> List[dict]:
-        if not ids:
-            return []
-        if self.supabase is not None:
-            try:
-                response = self.supabase.table("reviews").select(
-                    "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
-                ).in_("id", ids).order("review_date", desc=True).execute()
-                if response.data:
-                    return response.data
-            except Exception as e:
-                print(f"[DashboardService.fetch_reviews_by_ids] Supabase fetch 실패: {e}")
-        # 오프라인 폴백
-        filtered = [r for r in MOCK_REVIEWS if r["id"] in ids]
-        return filtered
-
-
