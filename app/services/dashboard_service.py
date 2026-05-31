@@ -611,4 +611,44 @@ class DashboardService:
         
         return statistics_response
 
+    def save_layout(self, user_token: str, pinned_widget: str | None) -> bool:
+        if self.supabase is not None:
+            try:
+                response = self.supabase.table("user_layouts").upsert(
+                    {"user_token": user_token, "pinned_widget": pinned_widget, "updated_at": datetime.now().isoformat()},
+                    on_conflict="user_token"
+                ).execute()
+                return True
+            except Exception as e:
+                print(f"[DashboardService.save_layout] Supabase upsert 실패: {e}")
+                return False
+        return True
+
+    def load_layout(self, user_token: str) -> str | None:
+        if self.supabase is not None:
+            try:
+                response = self.supabase.table("user_layouts").select("pinned_widget").eq("user_token", user_token).execute()
+                if response.data:
+                    return response.data[0].get("pinned_widget")
+            except Exception as e:
+                print(f"[DashboardService.load_layout] Supabase fetch 실패: {e}")
+                return None
+        return None
+
+    def fetch_reviews_by_ids(self, ids: List[str]) -> List[dict]:
+        if not ids:
+            return []
+        if self.supabase is not None:
+            try:
+                response = self.supabase.table("reviews").select(
+                    "id, product_id, source, reviewer_type, review_text, rating, review_date, sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id, products(id, brand_name, product_name, category, target_skin)"
+                ).in_("id", ids).order("review_date", desc=True).execute()
+                if response.data:
+                    return response.data
+            except Exception as e:
+                print(f"[DashboardService.fetch_reviews_by_ids] Supabase fetch 실패: {e}")
+        # 오프라인 폴백
+        filtered = [r for r in MOCK_REVIEWS if r["id"] in ids]
+        return filtered
+
 

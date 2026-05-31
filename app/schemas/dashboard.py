@@ -48,3 +48,13 @@ class ReviewCreate(BaseModel):
         "from_attributes": True
     }
 
+class LayoutSaveRequest(BaseModel):
+    token: str
+    pinned_widget: Optional[str] = None
+
+class LayoutResponse(BaseModel):
+    pinned_widget: Optional[str] = None
+
+class ReviewsByIdsRequest(BaseModel):
+    ids: List[str]
+

@@ -1,7 +1,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
 from app.api import deps
-from app.schemas.dashboard import ProductSchema, ReviewSchema, ReviewCreate
+from app.schemas.dashboard import ProductSchema, ReviewSchema, ReviewCreate, LayoutSaveRequest, LayoutResponse, ReviewsByIdsRequest
 from app.services.dashboard_service import DashboardService
 from app.services.ai_service import AIService
 
@@ -81,3 +81,35 @@ async def get_dashboard_statistics(
     """
     result = await dashboard_service.get_dashboard_statistics(product_id, period, ai_service)
     return result
+
+@router.get("/layout", response_model=LayoutResponse)
+def get_user_layout(
+    token: str = Query(..., description="사용자 식별 토큰"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
+):
+    """
+    사용자 대시보드 위젯 고정 레이아웃 조회 API
+    """
+    pinned = dashboard_service.load_layout(token)
+    return LayoutResponse(pinned_widget=pinned)
+
+@router.post("/layout")
+def save_user_layout(
+    payload: LayoutSaveRequest,
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
+):
+    """
+    사용자 대시보드 위젯 고정 레이아웃 저장/업데이트 API
+    """
+    success = dashboard_service.save_layout(payload.token, payload.pinned_widget)
+    return {"success": success}
+
+@router.post("/reviews/ids", response_model=List[ReviewSchema])
+def get_reviews_by_ids(
+    payload: ReviewsByIdsRequest,
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
+):
+    """
+    ID 배열을 기반으로 매칭되는 리뷰 상세 목록 조회 API
+    """
+    return dashboard_service.fetch_reviews_by_ids(payload.ids)
