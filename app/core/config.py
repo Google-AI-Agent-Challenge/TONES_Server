@@ -8,15 +8,15 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "super-secret-key-change-this-in-production-12345"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
-    # Supabase Config
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
-    SUPABASE_SERVICE_ROLE_KEY: str
-
-    # Pinecone Config
-    PINECONE_API_KEY: str
-    PINECONE_ENVIRONMENT: str = "us-east-1"
-    PINECONE_INDEX_NAME: str = "default-index"
+    # GCP & Cloud SQL Config
+    GCP_PROJECT_ID: Optional[str] = None
+    GCP_REGION: str = "us-central1"
+    CLOUD_SQL_CONNECTION_NAME: Optional[str] = None
+    DB_USER: str = "postgres"
+    DB_PASS: Optional[str] = None
+    DB_NAME: str = "postgres"
+    DB_HOST: Optional[str] = None
+    DB_PORT: int = 5432
 
     # Sentry Config
     SENTRY_DSN: Optional[str] = None

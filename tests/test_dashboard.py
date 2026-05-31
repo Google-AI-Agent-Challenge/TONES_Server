@@ -8,7 +8,7 @@ from app.services.ai_service import AIService
 
 def test_extract_scores_from_summary():
     # 1. 자가 치유 정규식 점수 복원 파싱 단위 테스트
-    service = DashboardService(supabase_client=None)
+    service = DashboardService(db_conn=None)
     
     summary_text = "[성분/고민]: 0.85 | [제형/발림]: 0.90 | [용기/디자인]: 0.15 \n요약: 자극 없고 발림성이 좋은데 용기가 쓰기 힘듭니다."
     parsed = service._extract_scores_from_summary(summary_text)
@@ -26,7 +26,7 @@ def test_extract_scores_from_summary():
 
 def test_aggregate_reviews():
     # 리뷰 집계 기능 (평균 평점, 감성 분석 점수 분포) 단위 테스트
-    service = DashboardService(supabase_client=None)
+    service = DashboardService(db_conn=None)
     
     mock_batch = [
         {
@@ -101,8 +101,8 @@ def test_local_trend_briefing_fallback():
 
 def test_get_dashboard_statistics_caching():
     # 동일 조건 반복 조회 시 TTL 캐싱으로 속도가 향상되는지 검증
-    service = DashboardService(supabase_client=None)
-    ai_service = AIService(pinecone_client=None)
+    service = DashboardService(db_conn=None)
+    ai_service = AIService(db_conn=None)
     
     product_id = "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba"
     period = 7
