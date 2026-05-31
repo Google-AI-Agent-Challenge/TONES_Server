@@ -5,6 +5,7 @@ pydantic-settings>=2.2.0
 pgvector>=0.2.0
 pg8000>=1.30.0
 google-cloud-sql-connector[pg8000]>=1.7.0
+google-cloud-aiplatform>=1.48.0
 sentry-sdk[fastapi]>=1.40.0
 pytest>=8.0.0
 httpx>=0.27.0
