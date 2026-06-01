@@ -139,19 +139,22 @@ class DashboardService:
     def _parse_db_row_to_review(self, row) -> dict:
         """
         SQL Query 결과 Tuple 데이터를 Schema에 맞는 딕셔너리로 안전하게 포맷팅
+        (데이터베이스에 score_ingredients 등 분석 컬럼이 누락되어 있어도 자동 감지하여 자가 치유 복구 수행!)
         """
-        # products JOIN 컬럼 파싱 (row[17]~row[21])
+        # p.id 가 존재하는지 체크하여 products 매핑 (보통 r 컬럼들 뒤에 붙으므로 row[-5] ~ row[-1])
         prod_obj = None
-        if len(row) > 17 and row[17] is not None:
-            prod_obj = {
-                "id": str(row[17]),
-                "brand_name": row[18],
-                "product_name": row[19],
-                "category": row[20],
-                "target_skin": row[21]
-            }
+        if len(row) >= 19:
+            p_idx = len(row) - 5
+            if row[p_idx] is not None:
+                prod_obj = {
+                    "id": str(row[p_idx]),
+                    "brand_name": row[p_idx+1],
+                    "product_name": row[p_idx+2],
+                    "category": row[p_idx+3],
+                    "target_skin": row[p_idx+4]
+                }
 
-        return {
+        review_dict = {
             "id": str(row[0]),
             "product_id": str(row[1]),
             "source": row[2],
@@ -166,11 +169,26 @@ class DashboardService:
             "ai_summary": row[11],
             "created_at": str(row[12]) if row[12] is not None else None,
             "review_id": str(row[13]) if row[13] is not None else None,
-            "score_ingredients": float(row[14]) if row[14] is not None else 0.5,
-            "score_formulation": float(row[15]) if row[15] is not None else 0.5,
-            "score_container": float(row[16]) if row[16] is not None else 0.5,
             "products": prod_obj
         }
+
+        # score_ingredients 컬럼 존재 여부 체크 (튜플 길이를 통해 유연하게 확인)
+        has_score_columns = False
+        if len(row) >= 22:
+            has_score_columns = True
+            
+        if has_score_columns:
+            review_dict["score_ingredients"] = float(row[14]) if row[14] is not None else 0.5
+            review_dict["score_formulation"] = float(row[15]) if row[15] is not None else 0.5
+            review_dict["score_container"] = float(row[16]) if row[16] is not None else 0.5
+        else:
+            # 컬럼 누락 시 summary 및 평점 기반 자가 치유(Self-Healing) 기동!
+            parsed = self._extract_scores_from_summary(review_dict.get("ai_summary", ""), review_dict=review_dict)
+            review_dict["score_ingredients"] = parsed["ingredients_skin_concerns_score"]
+            review_dict["score_formulation"] = parsed["formulation_spreadability_score"]
+            review_dict["score_container"] = parsed["container_design_score"]
+
+        return review_dict
 
     def fetch_products(self) -> List[dict]:
         if self.conn is not None:
@@ -202,7 +220,7 @@ class DashboardService:
                 sql = """
                     SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
                            r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           r.ai_summary, r.created_at, r.review_id,
                            p.id, p.brand_name, p.product_name, p.category, p.target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
@@ -236,7 +254,7 @@ class DashboardService:
                 sql = f"""
                     SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
                            r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           r.ai_summary, r.created_at, r.review_id,
                            p.id, p.brand_name, p.product_name, p.category, p.target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
@@ -271,7 +289,7 @@ class DashboardService:
                 sql = """
                     SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
                            r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           r.ai_summary, r.created_at, r.review_id,
                            p.id, p.brand_name, p.product_name, p.category, p.target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
@@ -301,7 +319,7 @@ class DashboardService:
                 sql = f"""
                     SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
                            r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id, r.score_ingredients, r.score_formulation, r.score_container,
+                           r.ai_summary, r.created_at, r.review_id,
                            p.id, p.brand_name, p.product_name, p.category, p.target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
