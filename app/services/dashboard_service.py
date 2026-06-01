@@ -195,9 +195,12 @@ class DashboardService:
             try:
                 cursor = self.conn.cursor()
                 cursor.execute("""
-                    SELECT id, brand_name, product_name, category, target_skin, created_at 
-                    FROM public.products 
-                    ORDER BY product_name ASC
+                    SELECT p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin, p.created_at 
+                    FROM public.products p
+                    JOIN public.brands b ON p.brand_id = b.id
+                    JOIN public.categories c ON p.category_id = c.id
+                    JOIN public.skin_types s ON p.skin_type_id = s.id
+                    ORDER BY p.product_name ASC
                 """)
                 rows = cursor.fetchall()
                 cursor.close()
@@ -218,12 +221,20 @@ class DashboardService:
             try:
                 cursor = self.conn.cursor()
                 sql = """
-                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
-                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id,
-                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
+                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+                           r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
+                    LEFT JOIN public.brands b ON p.brand_id = b.id
+                    LEFT JOIN public.categories c ON p.category_id = c.id
+                    LEFT JOIN public.skin_types s ON p.skin_type_id = s.id
+                    LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+                    LEFT JOIN public.keywords k ON rk.keyword_id = k.id
+                    GROUP BY r.id, p.id, b.name, c.name, s.name
                     ORDER BY r.review_date DESC, r.created_at DESC
                     LIMIT %s
                 """
@@ -252,13 +263,21 @@ class DashboardService:
                 
                 where_str = f"WHERE {' OR '.join(where_clauses)}"
                 sql = f"""
-                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
-                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id,
-                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
+                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+                           r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
+                    LEFT JOIN public.brands b ON p.brand_id = b.id
+                    LEFT JOIN public.categories c ON p.category_id = c.id
+                    LEFT JOIN public.skin_types s ON p.skin_type_id = s.id
+                    LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+                    LEFT JOIN public.keywords k ON rk.keyword_id = k.id
                     {where_str}
+                    GROUP BY r.id, p.id, b.name, c.name, s.name
                     ORDER BY r.review_date DESC, r.created_at DESC
                     LIMIT %s
                 """
@@ -287,13 +306,21 @@ class DashboardService:
             try:
                 cursor = self.conn.cursor()
                 sql = """
-                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
-                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id,
-                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
+                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+                           r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
+                    LEFT JOIN public.brands b ON p.brand_id = b.id
+                    LEFT JOIN public.categories c ON p.category_id = c.id
+                    LEFT JOIN public.skin_types s ON p.skin_type_id = s.id
+                    LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+                    LEFT JOIN public.keywords k ON rk.keyword_id = k.id
                     WHERE r.product_id = %s
+                    GROUP BY r.id, p.id, b.name, c.name, s.name
                     ORDER BY r.review_date DESC, r.created_at DESC
                     LIMIT %s
                 """
@@ -317,13 +344,21 @@ class DashboardService:
                 # PostgreSQL ANY 구문 또는 동적 플레이스홀더를 활용한 ID 리스트 매칭
                 placeholders = ",".join(["%s"] * len(ids))
                 sql = f"""
-                    SELECT r.id, r.product_id, r.source, r.reviewer_type, r.review_text, r.rating, 
-                           r.review_date, r.sentiment, r.sentiment_score, r.keywords, r.issue_type, 
-                           r.ai_summary, r.created_at, r.review_id,
-                           p.id, p.brand_name, p.product_name, p.category, p.target_skin
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
+                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+                           r.score_ingredients, r.score_formulation, r.score_container,
+                           p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
                     FROM public.reviews r
                     LEFT JOIN public.products p ON r.product_id = p.id
+                    LEFT JOIN public.brands b ON p.brand_id = b.id
+                    LEFT JOIN public.categories c ON p.category_id = c.id
+                    LEFT JOIN public.skin_types s ON p.skin_type_id = s.id
+                    LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+                    LEFT JOIN public.keywords k ON rk.keyword_id = k.id
                     WHERE r.id IN ({placeholders})
+                    GROUP BY r.id, p.id, b.name, c.name, s.name
                     ORDER BY r.review_date DESC, r.created_at DESC
                 """
                 cursor.execute(sql, ids)
@@ -439,18 +474,49 @@ class DashboardService:
                         sql = """
                             INSERT INTO public.reviews (
                                 id, product_id, source, reviewer_type, review_text, rating, review_date, 
-                                sentiment, sentiment_score, keywords, issue_type, ai_summary, review_id, 
+                                sentiment, sentiment_score, issue_type, ai_summary, review_id, 
                                 embedding, score_ingredients, score_formulation, score_container
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::sentiment_type, %s, %s, %s, %s, %s, %s::vector, %s, %s, %s)
+                            ) VALUES (
+                                %s::uuid, %s::uuid, 
+                                CASE 
+                                    WHEN LOWER(TRIM(%s)) IN ('youtube', 'blog', 'naver_store', 'olive_young', 'mock') THEN LOWER(TRIM(%s))::source_type
+                                    ELSE 'other'::source_type
+                                END,
+                                CASE 
+                                    WHEN LOWER(TRIM(%s)) IN ('general', 'influencer', 'expert') THEN LOWER(TRIM(%s))::reviewer_type
+                                    ELSE 'general'::reviewer_type
+                                END,
+                                %s, %s, %s::date, %s::sentiment_type, %s, 
+                                CASE 
+                                    WHEN LOWER(TRIM(%s)) IN ('ingredients', 'formulation', 'container', 'scent', 'irritation', 'none') THEN LOWER(TRIM(%s))::issue_type
+                                    ELSE 'other'::issue_type
+                                END,
+                                %s, %s, %s::vector, %s, %s, %s
+                            )
                         """
                         cursor.execute(sql, [
-                            sql_record["id"], sql_record["product_id"], sql_record["source"], sql_record["reviewer_type"],
+                            sql_record["id"], sql_record["product_id"], 
+                            sql_record["source"], sql_record["source"],
+                            sql_record["reviewer_type"], sql_record["reviewer_type"],
                             sql_record["review_text"], sql_record["rating"], sql_record["review_date"],
-                            sql_record["sentiment"], sql_record["sentiment_score"], sql_record["keywords"],
-                            sql_record["issue_type"], sql_record["ai_summary"], sql_record["review_id"],
+                            sql_record["sentiment"], sql_record["sentiment_score"], 
+                            sql_record["issue_type"], sql_record["issue_type"],
+                            sql_record["ai_summary"], sql_record["review_id"],
                             sql_record["embedding"], sql_record["score_ingredients"],
                             sql_record["score_formulation"], sql_record["score_container"]
                         ])
+                        
+                        # 다대다 키워드 적재 (트랜잭션 세션 내에서 함께 원자적으로 수행)
+                        if sql_record["keywords"]:
+                            for kw in sql_record["keywords"]:
+                                if kw and kw.strip():
+                                    clean_kw = kw.strip()
+                                    cursor.execute("INSERT INTO public.keywords (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING", [clean_kw])
+                                    cursor.execute("SELECT id FROM public.keywords WHERE keyword = %s", [clean_kw])
+                                    kw_id_row = cursor.fetchone()
+                                    if kw_id_row:
+                                        cursor.execute("INSERT INTO public.review_keywords (review_id, keyword_id) VALUES (%s::uuid, %s) ON CONFLICT DO NOTHING", [sql_record["id"], kw_id_row[0]])
+
                         self.conn.commit()
                         cursor.close()
                         print(f"[DashboardService] Cloud SQL pgvector 원자적 적재 성공: {row_uuid}")
@@ -477,15 +543,46 @@ class DashboardService:
                                 fallback_sql = """
                                     INSERT INTO public.reviews (
                                         id, product_id, source, reviewer_type, review_text, rating, review_date, 
-                                        sentiment, sentiment_score, keywords, issue_type, ai_summary, review_id
-                                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::sentiment_type, %s, %s, %s, %s, %s)
+                                        sentiment, sentiment_score, issue_type, ai_summary, review_id
+                                    ) VALUES (
+                                        %s::uuid, %s::uuid, 
+                                        CASE 
+                                            WHEN LOWER(TRIM(%s)) IN ('youtube', 'blog', 'naver_store', 'olive_young', 'mock') THEN LOWER(TRIM(%s))::source_type
+                                            ELSE 'other'::source_type
+                                        END,
+                                        CASE 
+                                            WHEN LOWER(TRIM(%s)) IN ('general', 'influencer', 'expert') THEN LOWER(TRIM(%s))::reviewer_type
+                                            ELSE 'general'::reviewer_type
+                                        END,
+                                        %s, %s, %s::date, %s::sentiment_type, %s, 
+                                        CASE 
+                                            WHEN LOWER(TRIM(%s)) IN ('ingredients', 'formulation', 'container', 'scent', 'irritation', 'none') THEN LOWER(TRIM(%s))::issue_type
+                                            ELSE 'other'::issue_type
+                                        END,
+                                        %s, %s
+                                    )
                                 """
                                 cursor.execute(fallback_sql, [
-                                    sql_record["id"], sql_record["product_id"], sql_record["source"], sql_record["reviewer_type"],
+                                    sql_record["id"], sql_record["product_id"], 
+                                    sql_record["source"], sql_record["source"],
+                                    sql_record["reviewer_type"], sql_record["reviewer_type"],
                                     sql_record["review_text"], sql_record["rating"], sql_record["review_date"],
-                                    sql_record["sentiment"], sql_record["sentiment_score"], sql_record["keywords"],
-                                    sql_record["issue_type"], healed_summary, sql_record["review_id"]
+                                    sql_record["sentiment"], sql_record["sentiment_score"], 
+                                    sql_record["issue_type"], sql_record["issue_type"],
+                                    healed_summary, sql_record["review_id"]
                                 ])
+                                
+                                # 다대다 키워드 적재 (자가 치유 시에도 동일하게 적재)
+                                if sql_record["keywords"]:
+                                    for kw in sql_record["keywords"]:
+                                        if kw and kw.strip():
+                                            clean_kw = kw.strip()
+                                            cursor.execute("INSERT INTO public.keywords (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING", [clean_kw])
+                                            cursor.execute("SELECT id FROM public.keywords WHERE keyword = %s", [clean_kw])
+                                            kw_id_row = cursor.fetchone()
+                                            if kw_id_row:
+                                                cursor.execute("INSERT INTO public.review_keywords (review_id, keyword_id) VALUES (%s::uuid, %s) ON CONFLICT DO NOTHING", [sql_record["id"], kw_id_row[0]])
+
                                 self.conn.commit()
                                 cursor.close()
                                 print(f"[DashboardService] 자가 치유된 레코드 Cloud SQL 적재 성공: {row_uuid}")
@@ -748,16 +845,21 @@ class DashboardService:
 
                 # 이번 기간 리뷰 로드
                 sql_this = """
-                    SELECT id, product_id, source, reviewer_type, review_text, rating, review_date, 
-                           sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id,
-                           score_ingredients, score_formulation, score_container
-                    FROM public.reviews
-                    WHERE review_date >= %s
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
+                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+                           r.score_ingredients, r.score_formulation, r.score_container
+                    FROM public.reviews r
+                    LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+                    LEFT JOIN public.keywords k ON rk.keyword_id = k.id
+                    WHERE r.review_date >= %s
                 """
                 params_this = [start_date_this_week]
                 if product_id:
-                    sql_this += " AND product_id = %s"
+                    sql_this += " AND r.product_id = %s"
                     params_this.append(product_id)
+                sql_this += " GROUP BY r.id"
                 cursor.execute(sql_this, params_this)
                 rows_this = cursor.fetchall()
                 reviews_this = [{
@@ -772,16 +874,21 @@ class DashboardService:
 
                 # 지난 기간 리뷰 로드 (WoW)
                 sql_last = """
-                    SELECT id, product_id, source, reviewer_type, review_text, rating, review_date, 
-                           sentiment, sentiment_score, keywords, issue_type, ai_summary, created_at, review_id,
-                           score_ingredients, score_formulation, score_container
-                    FROM public.reviews
-                    WHERE review_date >= %s AND review_date < %s
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
+                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+                           r.score_ingredients, r.score_formulation, r.score_container
+                    FROM public.reviews r
+                    LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+                    LEFT JOIN public.keywords k ON rk.keyword_id = k.id
+                    WHERE r.review_date >= %s AND r.review_date < %s
                 """
                 params_last = [start_date_last_week, start_date_this_week]
                 if product_id:
-                    sql_last += " AND product_id = %s"
+                    sql_last += " AND r.product_id = %s"
                     params_last.append(product_id)
+                sql_last += " GROUP BY r.id"
                 cursor.execute(sql_last, params_last)
                 rows_last = cursor.fetchall()
                 cursor.close()
@@ -811,7 +918,7 @@ class DashboardService:
             if self.conn is not None:
                 try:
                     cursor = self.conn.cursor()
-                    cursor.execute("SELECT name FROM public.products WHERE id = %s", [product_id])
+                    cursor.execute("SELECT product_name FROM public.products WHERE id = %s", [product_id])
                     row = cursor.fetchone()
                     cursor.close()
                     if row:
