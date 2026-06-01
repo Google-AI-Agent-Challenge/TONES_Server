@@ -10,7 +10,7 @@ __pycache__/
 */*.xlsx
 
 # Hidden Files
-.*
+# .* (CI/CD .github 폴더 추적을 위해 비활성화)
 
 # Distribution / packaging
 .Python
