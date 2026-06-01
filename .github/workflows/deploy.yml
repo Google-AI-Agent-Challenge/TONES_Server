@@ -1,0 +1,103 @@
+name: TONES Backend CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
+  SERVICE_NAME: tones-server
+  REPO_NAME: tones-repo
+  IMAGE_NAME: tones-server
+
+jobs:
+  # Job 1: CI (지속적 통합 - 코드 테스트 및 린트 검증)
+  # (PR 요청 시 및 Main 브랜치 Push 시 공통 작동하여 사전에 코드 결함 원천 차단)
+  test_and_validate:
+    name: Run Python Tests and Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 소스 코드 가져오기
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 2. 파이썬 가상 런타임 환경 셋업 (Python 3.11 사용)
+      - name: Set up Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # 3. 백엔드 패키지 의존성 설치
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # 4. Pytest 자동화 테스트 구동
+      # (Gemini API 키 등 외부 연동에 따른 장애 차단을 위해 가상 임시 환경변수 모킹 선언 후 기동)
+      - name: Execute Automated Unit Tests
+        env:
+          GEMINI_API_KEY: "dummy_key_for_ci_validation"
+          SECRET_KEY: "dummy_secret_key_for_test_purposes_only"
+        run: |
+          pytest -v
+
+  # Job 2: CD (지속적 배포 - Docker 빌드 및 Cloud Run 릴리즈)
+  # (이전 test_and_validate 단계가 100% 무결하게 통과해야만 기동하며, 오직 main 브랜치 반영 시에만 배포 시작)
+  deploy:
+    name: Build and Deploy to Cloud Run
+    needs: test_and_validate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 소스 코드 가져오기
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 2. GCP SDK 구글 클라우드 인증
+      - name: Authenticate with Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # 3. gcloud 설정
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 4. Artifact Registry 도커 기동 인증
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # 5. Docker 컨테이너 멀티 태깅 빌드 및 원격 Artifact Registry 저장
+      - name: Build and Push Docker Image
+        run: |
+          IMAGE_TAG="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          LATEST_TAG="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest"
+          
+          docker build -t $IMAGE_TAG -t $LATEST_TAG .
+          docker push $IMAGE_TAG
+          docker push $LATEST_TAG
+
+      # 6. Google Cloud Run 컨테이너 롤링 배포 단행
+      - name: Deploy to Google Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.GCP_REGION }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          flags: |
+            --allow-unauthenticated
+            --cpu=1
+            --memory=2Gi
+            --min-instances=0
+            --max-instances=10
