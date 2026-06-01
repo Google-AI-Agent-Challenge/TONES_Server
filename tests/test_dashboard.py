@@ -62,7 +62,7 @@ def test_aggregate_reviews():
 
 def test_local_trend_briefing_fallback():
     # 오프라인/키 미지정용 로컬 규칙 기반 한글 브리핑 분기 검증
-    ai_service = AIService(pinecone_client=None)
+    ai_service = AIService(db_conn=None)
     
     # 1. 특정 속성 수치 하락(자극성 불만 급증) 시 경고 브리핑 생성 테스트
     brief_warn = ai_service._local_trend_briefing_fallback(

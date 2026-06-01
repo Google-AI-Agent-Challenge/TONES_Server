@@ -21,7 +21,7 @@ def test_heuristic_absa_fallback():
     # 2. 발림성 극찬 및 산뜻 수분감 리뷰 검증
     res_form = service._local_heuristic_absa("진짜 대박 촉촉해요!! 발림성도 너무 부드럽고 끈적임 없이 제형이 산뜻합니다.")
     assert res_form["formulation_spreadability_score"] == 0.90
-    assert "패드" in res_form["keywords"]
+    assert "촉촉" in res_form["keywords"]
     assert res_form["overall_sentiment"] == "positive"
 
 
@@ -58,7 +58,7 @@ def test_pgvector_semantic_search_sql():
     
     # Mock fetchall returns
     mock_cursor.fetchall.return_value = [
-        ("rev-uuid-1", "product-uuid-1", "올리브영", "지성 피부", "수분감은 좋은데 용기가 헛돌아요", 4, "2026-05-31", "neutral", 0.52, ["용기"], "용기불편", "ai-summary", "2026-05-31", "ext-1", 0.85, 0.90, 0.22, 0.92)
+        ("rev-uuid-1", "수분감은 좋은데 용기가 헛돌아요", 4, "2026-05-31", "neutral", "용기불편", "ai-summary", 0.92)
     ]
     mock_conn.cursor.return_value = mock_cursor
 
@@ -82,7 +82,8 @@ def test_pgvector_semantic_search_sql():
     assert "product_id = %s" in called_sql
 
 
-def test_cloud_sql_atomic_rollback_on_save_failure():
+@pytest.mark.asyncio
+async def test_cloud_sql_atomic_rollback_on_save_failure():
     """
     GCP 통합 DB 아키텍처: 리뷰 및 임베딩 적재 중 RDBMS 오류 발생 시,
     동일 트랜잭션의 connection.rollback()이 작동하여 pgvector와 RDBMS 레코드가 원자적으로 동시 롤백되는지 검증
@@ -115,7 +116,7 @@ def test_cloud_sql_atomic_rollback_on_save_failure():
         source="올리브영"
     )
 
-    res = dashboard_service.process_and_save_reviews([review_in], ai_service)
+    res = await dashboard_service.process_and_save_reviews([review_in], ai_service)
     
     # 롤백이 성공적으로 1회 호출되어 데이터 원자성이 지켜졌는지 확인
     assert res["success_count"] == 0

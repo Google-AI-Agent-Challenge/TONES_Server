@@ -10,6 +10,13 @@ try:
     HAS_VERTEX_SDK = True
 except ImportError:
     HAS_VERTEX_SDK = False
+    class GenerativeModel:
+        def __init__(self, *args, **kwargs): pass
+        def generate_content(self, *args, **kwargs): pass
+    class TextEmbeddingModel:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs): return cls()
+        def get_embeddings(self, *args, **kwargs): pass
 
 _vertex_initialized = False
 
@@ -343,7 +350,8 @@ class AIService:
         elif any(w in review_text for w in ["순하", "진정"]):
             ingredients_score = 0.85
             
-        if any(w in review_text for w in ["끈적", "밀림"]):
+        has_sticky_neg = "끈적" in review_text and not any(ok in review_text for ok in ["끈적임 없이", "끈적이지", "끈적임 없는"])
+        if has_sticky_neg or "밀림" in review_text:
             formulation_score = 0.20
         elif any(w in review_text for w in ["촉촉", "부드럽", "제형"]):
             formulation_score = 0.90
