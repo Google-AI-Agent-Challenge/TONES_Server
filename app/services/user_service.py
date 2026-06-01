@@ -12,7 +12,7 @@ class UserService:
                 "email": "test@example.com",
                 "full_name": "Test User",
                 "is_active": True,
-                "hashed_password": "$2b$12$RfunWDaR3GC7axRblV921.G/KS8jGihFyTBp/5rL9NMDANRbmGQ/2"
+                "hashed_password": "de45ae86a03b7d3e86d7077c4bbb572e$43db25566c86df93cbc866409b7f9b3f36acd51a10e41ffc18a35ab56a3f5855"
             }
         }
 

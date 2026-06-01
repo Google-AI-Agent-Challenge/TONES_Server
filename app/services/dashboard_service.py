@@ -265,7 +265,7 @@ class DashboardService:
                 sql = f"""
                     SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
                            r.review_date::text, r.sentiment::text, r.sentiment_score, 
-                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{{}}') AS keywords,
                            r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
                            r.score_ingredients, r.score_formulation, r.score_container,
                            p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
@@ -346,7 +346,7 @@ class DashboardService:
                 sql = f"""
                     SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
                            r.review_date::text, r.sentiment::text, r.sentiment_score, 
-                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+                           COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{{}}') AS keywords,
                            r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
                            r.score_ingredients, r.score_formulation, r.score_container,
                            p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin

@@ -38,16 +38,26 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio httpx # 의존성 수동 탑재 보장!
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       # 4. Pytest 자동화 테스트 구동
       # (Gemini API 키 등 외부 연동에 따른 장애 차단을 위해 가상 임시 환경변수 모킹 선언 후 기동)
       - name: Execute Automated Unit Tests
         env:
-          GEMINI_API_KEY: "dummy_key_for_ci_validation"
+          PROJECT_NAME: "TONES Server"
+          API_V1_STR: "/api/v1"
+          ACCESS_TOKEN_EXPIRE_MINUTES: 60
+          SUPABASE_URL: "https://example.supabase.co"
+          SUPABASE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_anon_key"
+          SUPABASE_SERVICE_ROLE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_service_role_key"
+          PINECONE_API_KEY: "dummy-pinecone-api-key"
+          PINECONE_ENVIRONMENT: "us-east-1"
+          PINECONE_INDEX_NAME: "dummy-index"
           SECRET_KEY: "dummy_secret_key_for_test_purposes_only"
+          GEMINI_API_KEY: "dummy-gemini-api-key"
         run: |
-          pytest -v
+          python -m pytest -v
 
   # Job 2: CD (지속적 배포 - Docker 빌드 및 Cloud Run 릴리즈)
   # (이전 test_and_validate 단계가 100% 무결하게 통과해야만 기동하며, 오직 main 브랜치 반영 시에만 배포 시작)
