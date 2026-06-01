@@ -1,6 +1,11 @@
--- 1. Users 테이블 생성 DDL
-CREATE TABLE IF NOT EXISTS public.users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+-- 1. 기존 테이블 일괄 삭제 (의존성 제거 순서)
+DROP TABLE IF EXISTS public.reviews CASCADE;
+DROP TABLE IF EXISTS public.products CASCADE;
+DROP TABLE IF EXISTS public.users CASCADE;
+
+-- 2. Users 테이블 생성 DDL
+CREATE TABLE public.users (
+    id VARCHAR(255) PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     full_name VARCHAR(100),
     hashed_password VARCHAR(255) NOT NULL,
@@ -9,55 +14,30 @@ CREATE TABLE IF NOT EXISTS public.users (
     updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 2. updated_at 자동 갱신 트리거 및 함수 설정 (선택 사항)
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = timezone('utc'::text, now());
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
-DROP TRIGGER IF EXISTS update_users_updated_at ON public.users;
-CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON public.users
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- 3. Products 테이블 생성 DDL (Reviews가 참조하므로 선선언 필요)
-CREATE TABLE IF NOT EXISTS public.products (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    description TEXT,
-    price NUMERIC,
-    created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+-- 3. Products 테이블 생성 DDL (ProductSchema 참고)
+CREATE TABLE public.products (
+    id VARCHAR(255) PRIMARY KEY,
+    brand_name VARCHAR(255) NOT NULL,
+    product_name VARCHAR(255) NOT NULL,
+    category VARCHAR(255) NOT NULL,
+    target_skin VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
-DROP TRIGGER IF EXISTS update_products_updated_at ON public.products;
-CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON public.products
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- 4. 커스텀 감성 타입(ENUM) 선언 (Supabase SQL 반복 실행 대응형)
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sentiment_type') THEN
-        CREATE TYPE sentiment_type AS ENUM ('positive', 'neutral', 'negative');
-    END IF;
-END$$;
-
--- 5. Reviews 테이블 생성 DDL (이미지 스키마 명세 완벽 반영)
-CREATE TABLE IF NOT EXISTS public.reviews (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    product_id UUID NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
-    source TEXT NOT NULL,
-    reviewer_type TEXT,
+-- 4. Reviews 테이블 생성 DDL (ReviewSchema 참고)
+CREATE TABLE public.reviews (
+    id VARCHAR(255) PRIMARY KEY,
+    product_id VARCHAR(255) NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+    source VARCHAR(255) NOT NULL,
+    reviewer_type VARCHAR(255),
     review_text TEXT NOT NULL,
-    rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
-    review_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    sentiment sentiment_type NOT NULL,
-    sentiment_score NUMERIC,
+    rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+    review_date VARCHAR(100) NOT NULL,
+    sentiment VARCHAR(50) NOT NULL,
+    sentiment_score DOUBLE PRECISION,
     keywords TEXT[] NOT NULL DEFAULT '{}',
-    issue_type TEXT,
+    issue_type VARCHAR(255),
     ai_summary TEXT,
     created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
-    review_id UUID UNIQUE
+    review_id VARCHAR(255)
 );

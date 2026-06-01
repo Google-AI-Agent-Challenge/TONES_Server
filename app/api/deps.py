@@ -37,7 +37,8 @@ def get_db_connection():
 
     try:
         # A. GCP Cloud SQL UNIX 소켓 직접 연결 시도 (배포 환경 - 무겁고 에러가 잦은 Connector 제거 후 UNIX 소켓 직연결!)
-        if cloud_sql_conn and not cloud_sql_conn.startswith("your-"):
+        import sys
+        if sys.platform != "win32" and cloud_sql_conn and not cloud_sql_conn.startswith("your-"):
             print(f"[deps] GCP Cloud SQL UNIX 소켓 연결 기동: /cloudsql/{cloud_sql_conn}/.s.PGSQL.5432")
             conn = pg8000.dbapi.connect(
                 unix_sock=f"/cloudsql/{cloud_sql_conn}/.s.PGSQL.5432",
