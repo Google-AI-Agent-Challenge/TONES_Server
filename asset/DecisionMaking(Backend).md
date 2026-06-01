@@ -13,16 +13,16 @@
 | **핵심 웹/프레임워크** | **FastAPI 0.110.0+** | Python 3.11+ 기반의 고성능 비동기 API 웹 프레임워크 설계 |
 | **언어** | **Python Type Hints** | 안정적이고 견고한 정적 분석 기반 타이핑 환경 구축 |
 | **비동기 WAS** | **Uvicorn standard 0.28.0+** | 고성능 비동기 ASGI 서버 구동 및 실시간 이벤트 동시성 제어 |
-| **데이터 레이어** | **Supabase Client SDK 2.3.0+** | PostgreSQL RDBMS 연동, 트랜잭션 처리 및 안정적인 데이터 CRUD |
-| | **Pinecone Client SDK 3.1.0+** | 고성능 벡터 데이터베이스 연동 및 대규모 의미론적 검색 수행 |
+| **데이터 레이어** | **GCP Cloud SQL & pgvector** | `pg8000` 비동기 직접 드라이버 및 `pgvector 0.2.0+` 패키지를 도입하여 PostgreSQL 내 코사인 유사도 연산 및 시맨틱 RAG 통합 검색 구현 (구형 Pinecone 벡터 DB 의존성 전면 제거) |
 | **AI 및 분석** | **Google Gemini Embedding** | `text-embedding-004` 모델을 활용하여 768차원 고차원 의미 벡터 생성 |
-| | **Google Gemini Generative** | `gemini-2.0-flash` 모델 탑재 및 실시간 RAG 기반 답변 생성 |
-| | **3단계 강건성 복원력 엔진** | 1차 `gemini-2.0-flash` 장애 시 2차 `gemini-1.5-flash` 자동 하향 Degradation, 최종 마비 시 3차 Local Offline Dummy로의 3중 폴백 보장 |
-| | **ABSA 분석 엔진** | 속성 기반 감성 분석(Aspect-Based Sentiment Analysis) 엔진 탑재로 성분/피부, 제형/발림성, 용기/디자인 스코어링 강제 |
-| **데이터 파이프라인** | **Selenium 4.0.0+ & curl_cffi 0.6.0+** | Edge 모바일 에뮬레이션 및 가상 스크롤, XHR/Fetch API 인터셉터를 통한 올리브영 데이터 수집 |
-| | **Pandas 2.0.0+ & openpyxl 3.1.0+** | 평점 균등 샘플링 가공 후 프리미엄 엑셀 적재 지원 |
-| **보안 및 미들웨어** | **python-jose 3.3.0+** | JWT 기반 무상태(Stateless) 토큰 인증 시스템 구현 |
-| | **passlib + bcrypt 4.0.1+** | 강력한 단방향 비밀번호 솔트 및 해시 암호화 적용 |
+| **AI 및 생성** | **Google Gemini Generative** | `gemini-2.0-flash` 모델 탑재 및 실시간 RAG 기반 답변 생성 |
+| **장애 복원력** | **3단계 강건성 복원력 엔진** | 1차 Vertex AI SDK 호출 -> 실패 시 2차 Generative Language HTTP REST API 폴백 -> 최종 API 마비 시 3차 Local Offline Heuristic 엔진으로의 3중 폴백 보장 |
+| **텍스트 인텔리전스** | **ABSA 분석 엔진** | 속성 기반 감성 분석(Aspect-Based Sentiment Analysis) 엔진 탑재로 성분/피부, 제형/발림성, 용기/디자인 스코어링 강제 |
+| **통계 복원력** | **Heuristic 점수 복원 엔진** | 통계 집계 시 감성 스코어 컬럼이 누락된 구형 레코드 대상 정규식 역추출 및 평점/키워드 가중치 기반 휴리스틱 추정으로 통계 왜곡 방지 |
+| **데이터 파이프라인** | **Selenium 4.0.0+ & curl_cffi 0.6.0+** | Edge 모바일 에뮬레이션 및 가상 스크롤, XHR/Fetch API 인터셉터를 통한 올리브영 데이터 수집 (도커 배포 종속성에서 제외하여 프로덕션 경량화 달성) |
+| | **Pandas 2.0.0+ & openpyxl 3.1.0+** | 평점 균등 샘플링 가공 후 프리미엄 엑셀 적재 지원 (로컬 전용 패키지 격리) |
+| **보안 및 미들웨어** | **pyjwt 2.8.0+** | C/Rust 컴파일러 빌드 오류 방지를 위해 `python-jose`를 대체한 순수 파이썬(Pure Python) JWT 기반 인증 아키텍처 구현 |
+| | **hashlib & hmac** | C/Rust 의존성이 무거운 `bcrypt`를 우회하여 순수 파이썬 해시 솔팅 및 단방향 암호화 처리 구현 |
 | | **Pydantic v2** | 컴파일 레벨 데이터 유효성 검증 및 인젝션 공격 원천 차단 |
 | **테스트 및 APM** | **Pytest 8.0.0+** | 단위/통합 테스트 자동화 스위트 구축 |
 | | **HTTPX Client** | API 통합 테스트용 비동기 비차단 HTTP 통신 지원 |
@@ -33,12 +33,12 @@
 ## 🏗️ 주요 아키텍처 결정 사항 (Architectural Decisions)
 
 ### 1. FastAPI + Uvicorn 비동기 아키텍처 및 Pydantic v2 정적 검증
-- **비동기 동시성 제어**: 비동기 ASGI 웹 서버인 Uvicorn 위에서 FastAPI의 `async/await` 동시성 제어를 100% 활용하여 스루풋(Throughput)을 극대화하고 최저 대기시간(Latency)을 보장합니다.
+- **비동기 동시성 제어**: 비동기 ASGI 웹 서버인 Uvicorig 위에서 FastAPI의 `async/await` 동시성 제어를 100% 활용하여 스루풋(Throughput)을 극대화하고 최저 대기시간(Latency)을 보장합니다.
 - **스키마 수준 검증**: Pydantic v2 기반의 엄격한 데이터 유효성 검증 레이어를 구축하여 API 엔드포인트 도달 전에 비정상적인 데이터 주입을 원천 차단하고 구조화된 데이터 흐름(DTO 패턴)을 강제합니다.
 
-### 2. AI 기반 하이브리드 검색 및 강건한 폴백 아키텍처
-- **768차원 임베딩**: Google Gemini `text-embedding-004` 모델을 활용하여 사용자의 자연어 질문을 768차원의 의미론적 벡터로 실시간 인코딩합니다.
-- **고가용성 벡터 검색**: Pinecone 벡터 데이터베이스와의 연동을 통해 고성능 시맨틱(Semantic) 검색을 수행하되, 외부 API 장애 혹은 오프라인 테스트 환경을 고려하여 자체 "오프라인 폴백(Offline Fallback)" 메커니즘을 설계함으로써 무중단 서비스 연속성을 보장합니다.
+### 2. pgvector 기반 실시간 시맨틱 검색 통합 (pgvector Semantic Search) [UPDATE]
+- **pgvector 통합 아키텍처**: 기존의 외부 Pinecone 벡터 데이터베이스 의존성을 완전히 걷어내고, **GCP Cloud SQL PostgreSQL의 pgvector 확장 기능**을 전면에 도입했습니다.
+- **768차원 임베딩 결합**: `text-embedding-004` 모델을 통해 생성된 768차원 의미 벡터를 RDBMS의 `embedding` 컬럼(vector 타입)에 직접 결합하여 단일 데이터베이스 내에서 코사인 유사도 검색(`embedding <=> %s::vector ASC`)을 비동기로 완벽히 처리합니다.
 
 ### 3. RAG(Retrieval-Augmented Generation) 및 Gemini 멀티 모델 생성 엔진
 - **동적 프레임워크 RAG**: 데이터베이스 검색 컨텍스트(Context)와 질문 프롬프트를 동적으로 조립하여 환각 현상(Hallucination)을 제어하는 RAG 아키텍처 기반 생성 엔진을 구축하였습니다.
@@ -48,28 +48,29 @@
 - **텍스트 인텔리전스 고도화**: 단순한 긍정/부정 판단을 넘어 수집된 리뷰 텍스트를 정밀하게 분석하기 위해 속성 기반 감성 분석(ABSA) 엔진을 탑재하였습니다.
 - **다차원 감성 분류**: 리뷰 본문으로부터 화장품의 핵심 속성(성분/피부 고민 점수, 제형/발림성 점수, 용기/디자인 점수)을 0.0 ~ 1.0 점수 스케일로 추출하고, 구체적인 불만 유형(자극, 제형불만 등)을 분류하여 실시간으로 대시보드 데이터로 매핑합니다.
 
-### 5. 고신뢰성 데이터 동기화: 자가 치유(Self-Healing) 및 트랜잭션 롤백
-- **자가 치유 (Self-Healing)**: 대량의 데이터 적재 중 데이터베이스의 스키마 미매치나 특정 비정상 컬럼 에러 발생 시, 해당 컬럼을 실시간으로 제외하고 적재를 재시도하는 동적 폴백 프로세스를 탑재하여 적재 프로세스가 전체 중단되는 현상을 방지합니다.
-- **이종 데이터베이스 트랜잭션 롤백**: Supabase와 Pinecone 등 물리적으로 분리된 저장소에 적재할 때 데이터 정합성을 보호하기 위해, Supabase 적재 실패 시 이미 Pinecone에 입력된 벡터 인덱스를 실시간으로 함께 추적하여 삭제(Rollback)하는 정합성 보장 로직을 설계했습니다.
+### 5. 단일 RDBMS 트랜잭션 원자성 및 자가 치유 엔진 (Atomic Transaction & Self-Healing) [UPDATE]
+- **단일 트랜잭션 원자성**: 기존 Supabase와 Pinecone 간의 분산 데이터베이스 정합성을 지키기 위해 수행되던 복잡한 이종 트랜잭션 롤백 로직을 폐기했습니다. pgvector 통합에 따라 **표준 RDBMS의 `rollback()` 처리 단 한 줄**로 원데이터와 벡터 인덱스의 완벽한 원자적 트랜잭션 성공을 보장합니다.
+- **자가 치유 (Self-Healing) 파이프라인**: 대량의 데이터 적재 중 데이터베이스의 스키마 미매치나 특정 비정상 컬럼 에러 발생 시, 시스템이 중단되지 않고 해당 점수 데이터를 요약 텍스트로 보완 적재하는 자가 치유 파이프라인을 세밀히 설계했습니다.
 
-### 6. 3단계 가용성 폴백 아키텍처 (3-Tier Graceful Fallback)
-- Google Gemini API 장애나 로컬 부하 상황에서도 서비스의 영속성을 보장하고자 다음과 같은 3중 복원 구조를 적용하였습니다.
-  * **1차 핵심 엔진**: `gemini-2.0-flash` 모델 활용 생성.
-  * **2차 안정성 엔진**: 1차 호출 장애 발생 시 `gemini-1.5-flash` 모델로 자동 하향 다운그레이드.
-  * **3차 오프라인 엔진**: 외부 클라우드 API 통신이 전체 마비될 경우, 로컬 룰 베이스 더미 대답 생성기 및 로컬 시맨틱 더미 리뷰 리스트를 즉각 구성하여 무중단 클라이언트 통신을 보장.
+### 6. 3단계 가용성 폴백 및 Heuristic 점수 복원력 (3-Tier Fallback & Heuristic Scorer) [UPDATE]
+- **3중 복원 가용성 구조**: Vertex AI SDK 연결 장애 또는 외부 API 할당량 소진 시 1) Generative REST API로의 HTTP 폴백을 수행하고, 인터넷 전체 차단 시 2) 로컬 룰 베이스 및 더미 인사이트 요약기(Korean Rule-based Engine)로 무중단 폴백합니다.
+- **Heuristic 점수 복원**: 리뷰 데이터 애그리게이션 시 개별 감성 점수 컬럼이 누락된 구형 레코드가 있을 경우, **정규식(Regular Expression)으로 `ai_summary` 내 점수를 역추출**하거나 이마저 실패 시 리뷰 평점 및 특정 뷰어 키워드(자극, 진정, 끈적임 등)를 바탕으로 감성 점수를 정교히 추론하는 Heuristic 점수 복원 엔진을 탑재하여 통계 왜곡을 원천 차단합니다.
 
 ### 7. 모바일 웹 시뮬레이션 및 API 인터셉터 기반 데이터 수집 파이프라인
 - **Shadow DOM 렌더링 극복**: 올리브영 모바일 웹의 가상 스크롤(Virtual Scroll) 및 Shadow DOM 렌더링 한계를 우회하고자 Edge 모바일 에뮬레이션 및 가상 스크롤 트리거 브라우저 환경을 설계하였습니다.
 - **XHR/Fetch API 인터셉터**: 브라우저 네트워크단에서 `/review/api/v2/reviews/cursor` API의 원시 통신 응답을 실시간으로 가로채는 인터셉터 기술을 적용해 오차 없는 원문 데이터를 정밀 획득합니다.
 - **벌크 Upsert**: 수집된 데이터는 평점별 균등 샘플링과 해시 기반의 UUID5 생성 파이프라인을 통과하여, 중복을 원천 배제한 상태로 데이터베이스에 bulk upsert 처리됩니다.
 
-### 8. JWT 무상태 인증 및 엔드투엔드 보안 미들웨어
-- `python-jose`와 `bcrypt` 알고리즘을 활용하여 사용자 비밀번호를 안전하게 단방향 해싱하여 저장하고, JWT(JSON Web Token) 기반의 Stateless 인증 아키텍처를 구현하였습니다.
-- FastAPI의 의존성 주입(`Dependency Injection`) 메커니즘을 `app/api/deps.py`에 적용하여, 모든 주요 AI 리액션 및 데이터 검색 서비스에 대해 인가된 토큰 소유자만 안전하게 자원을 소비할 수 있도록 보안 레이어를 설계했습니다.
+### 8. 경량화 프로덕션 빌드 및 무제한 이식성 (Lightweight Container & Zero-Compile Errors) [NEW]
+- **배포 빌드 안정성 극대화**: 컨테이너 빌드 및 서버리스 배포 환경에서 C/Rust 컴파일러 부재나 OpenSSL 라이브러리 충돌로 빌드가 실패하는 문제를 예방하고자 프로덕션 의존성(`requirements.txt`)을 극도로 경량화했습니다.
+  - `google-cloud-sql-connector` 대신 `pg8000` 직접 UNIX 소켓 연결 탑재.
+  - `google-cloud-aiplatform` Vertex SDK 대신 HTTP REST API 통신 유연화.
+  - `python-jose`, `bcrypt` 등 컴파일 무거운 보안 팩을 순수 파이썬 구현체 `pyjwt`로 대체.
+  - 로컬 전용 크롤러 라이브러리(`selenium`, `pandas`, `curl_cffi` 등)를 도커 배포 목록에서 제외하여 컨테이너 경량화 및 빌드 성공률 100% 달성.
 
 ---
 
-## 📂 계층형 폴더 구조 (Layered Folder Architecture)
+## 📂 계층형 폴더 구조 (Layered Folder Architecture) [UPDATE]
 
 프로젝트는 모듈별 명확한 역할 분담과 유지보수성을 극대화하기 위해 다음과 같은 계층형 디렉터리 아키텍처로 구성되었습니다.
 
@@ -79,29 +80,30 @@ TONES_Server/
 │   ├── api/                        # API 엔드포인트 라우터 및 의존성 주입 레이어
 │   │   ├── v1/                     # API 버전 1.0 라우터 그룹
 │   │   │   ├── endpoints/          # 세부 도메인별 API 라우터 실체
-│   │   │   │   ├── ai_search.py    # Pinecone 시맨틱 검색 및 Gemini AI 답변 생성 (POST)
+│   │   │   │   ├── ai_search.py    # Cloud SQL pgvector 시맨틱 검색 및 Gemini RAG 답변 생성 (POST)
 │   │   │   │   ├── auth.py         # 회원가입 및 JWT 액세스 토큰 발급/로그인 (POST)
-│   │   │   │   ├── dashboard.py    # 제품 목록, 최신 리뷰, 키워드 검색 등 데이터 조회 (GET)
+│   │   │   │   ├── dashboard.py    # 제품 목록, 최신 리뷰, 키워드 검색, 벌크 업로드, 레이아웃 저장/로드 등 핵심 통계 API (GET/POST)
 │   │   │   │   └── users.py        # 로그인된 사용자 정보 조회 프로필 엔드포인트 (GET)
 │   │   │   └── api.py              # v1 도메인별 라우터들을 하나로 통합하는 마스터 라우터
 │   │   └── deps.py                 # 공통 의존성 주입 (JWT 인증 세션 및 공통 서비스 인스턴스 반환)
 │   │
 │   ├── core/                       # 프로젝트 전역 구성 및 보안 설정
 │   │   ├── config.py               # pydantic-settings 기반 환경변수 (.env) 검증 및 전역 구성 객체
-│   │   └── security.py             # bcrypt 패스워드 해싱 및 JWT 암호화/인증 핵심 보안 유틸리티
+│   │   └── security.py             # custom 암호화 패스워드 솔팅 해싱 및 PyJWT 암호화/인증 핵심 보안 유틸리티
 │   │
 │   ├── models/                     # 데이터베이스 스키마 및 마이그레이션 관리
-│   │   └── schema.sql              # Supabase PostgreSQL 초기 테이블 구성 및 인덱스 배치 SQL
+│   │   ├── gcp_schema.sql          # GCP Cloud SQL PostgreSQL 및 pgvector 확장 기능이 활성화된 운영계 데이터베이스 스키마
+│   │   └── schema.sql              # 개발/로컬 테스트용 PostgreSQL 테이블 및 기초 관계 스키마
 │   │
 │   ├── schemas/                    # Pydantic 데이터 검증 레이어 (DTO 역할 수행)
 │   │   ├── ai_search.py            # AI 검색 및 답변 생성에 사용되는 요청/응답 스키마 명세
 │   │   ├── auth.py                 # 로그인 정보 및 토큰 결과 스키마 명세
-│   │   ├── dashboard.py            # 제품 및 리뷰 데이터 파싱용 Pydantic 스키마 정의
+│   │   ├── dashboard.py            # 제품, 리뷰 데이터 파싱 및 레이아웃 조작용 Pydantic 스키마 정의
 │   │   └── user.py                 # 사용자 가입 및 프로필 반환 구조 정의
 │   │
 │   ├── services/                   # 비즈니스 로직 및 외부 연동 인터페이스 구현
-│   │   ├── ai_service.py           # Gemini 임베딩/생성 API 연동, Pinecone 검색 및 폴백 복원력 탑재
-│   │   ├── dashboard_service.py    # Supabase DB 쿼리를 직접 수행하여 대시보드 데이터 통계 집계
+│   │   ├── ai_service.py           # Gemini 임베딩/생성 API 연동, Cloud SQL pgvector 검색 및 RAG 답변 생성 및 ABSA 분석 구현
+│   │   ├── dashboard_service.py    # PostgreSQL DB 쿼리를 직접 수행하여 대시보드 통계 계산, 자가 치유 적재 및 TTL 캐싱 적용
 │   │   └── user_service.py         # 사용자 비밀번호 확인, 신규 등록 및 프로필 반환 등 계정 서비스
 │   │
 │   └── main.py                     # FastAPI 인스턴스 생성, CORS/Sentry 미들웨어 초기 설정 (진입점)
@@ -109,17 +111,21 @@ TONES_Server/
 ├── tests/                          # Pytest 기반의 자동화 테스트 스위트 폴더
 │   ├── conftest.py                 # FastAPI TestClient 모듈 수준 피스처(Fixture) 설정
 │   ├── test_ai.py                  # AI 검색, RAG 답변 엔드포인트 및 AIService의 오프라인 폴백 동작 검증
-│   └── test_auth.py                # 가상 사용자 회원가입 및 JWT 액세스 토큰 발행 비즈니스 로직 단위 테스트
+│   ├── test_auth.py                # 가상 사용자 회원가입 및 JWT 액세스 토큰 발행 비즈니스 로직 단위 테스트
+│   └── test_dashboard.py           # 대시보드 통계 조회 및 레이아웃 제어 API 엔드포인트 통합 테스트
 │
+├── review_crawler/                 # 데이터 수집 및 데이터 적재 파이프라인 (Local Execution Only)
+│   ├── olive_young_crawler.py      # Selenium Edge 모바일 에뮬레이션 및 API 인터셉터 기반 올리브영 리뷰 수집 크롤러
+│   └── upload_to_supabase.py       # 크롤링된 XLSX 데이터 분석 및 deterministic UUID5 생성을 거친 Supabase/Cloud SQL 벌크 적재 엔진
+│
+├── .env                            # [SECRET] 데이터베이스 소켓 경로, API 키 등의 런타임 환경변수
 ├── .env.example                    # 프로젝트 초기 세팅을 위한 환경변수 템플릿 파일
 ├── .gitignore                      # Git 버전 관리에서 제외할 바이너리 및 비밀 정보 목록
-├── Dockerfile                      # 멀티 스테이지 빌드 기반의 경량화된 컨테이너 배포 구성 명세
-├── README.md                       # 프로젝트 소개 및 로컬 서버 구축 가이드 문서
-├── requirements.txt                # FastAPI, Supabase, Pinecone 등 파이썬 패키지 의존성 정의
-│
-# ─── 데이터 수집 및 데이터 적재 파이프라인 (Data Pipeline Layer) ───
-├── olive_young_crawler.py          # Selenium Edge 모바일 에뮬레이션 및 API 인터셉터 기반 올리브영 리뷰 수집 크롤러
-└── upload_to_supabase.py           # 크롤링된 XLSX 데이터 분석 및 deterministic UUID5 생성을 거친 Supabase 벌크 적재 엔진
+├── Dockerfile                      # 경량 멀티 스테이지 빌드 기반의 프로덕션 컨테이너 배포 구성 명세
+├── cloudbuild.yaml                 # GCP Cloud Build 자동 빌드/배포 트리거 파이프라인 설정
+├── deploy.sh                       # GCP Cloud Run 컨테이너 빌드 및 무중단 배포 자동화 셸 스크립트
+├── requirements.txt                # 프로덕션 서버 빌드용 파이썬 패키지 최소 의존성 정의 (크롤러 패키지 제외로 빌드 극대화)
+└── README.md                       # 프로젝트 소개 및 로컬 서버 구축 가이드 문서
 ```
 
 ---
