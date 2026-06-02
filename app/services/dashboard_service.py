@@ -5,6 +5,15 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 from app.schemas.dashboard import ReviewCreate
 from app.services.ai_service import AIService
+from app.core.cache import dashboard_cache
+
+# TTL 상수 (초)
+_TTL_SUMMARY = 300
+_TTL_KEYWORDS = 300
+_TTL_TREND = 300
+_TTL_INSIGHTS = 300
+_TTL_AI_BRIEFING = 1800
+_TTL_REVIEWS_COUNT = 120
 
 # 오프라인 상태 또는 DB 미연동 시 제공할 고품질의 화장품 패드 분석 목업 데이터
 MOCK_PRODUCTS = [
@@ -134,7 +143,6 @@ MOCK_REVIEWS = [
 class DashboardService:
     def __init__(self, db_conn=None):
         self.conn = db_conn
-        self._stats_cache = {}  # TTL 캐시 보관소: {(product_id, period_days): (timestamp, stats_data)}
 
     def _parse_db_row_to_review(self, row) -> dict:
         """
@@ -624,6 +632,10 @@ class DashboardService:
                 print(f"[DashboardService] 리뷰 처리 중 예외 발생 (건너뜀 및 실패 카운트 증가): {e}")
                 failure_count += 1
 
+        # 새 리뷰가 적재되었으므로 대시보드 캐시 전체 무효화
+        dashboard_cache.invalidate_all()
+        print("[DashboardService] 리뷰 적재 완료 — 대시보드 캐시 전체 무효화")
+
         return {
             "status": "completed",
             "total_reviews": len(reviews),
@@ -824,13 +836,12 @@ class DashboardService:
         """
         통합 통계 서빙 및 캐싱 서비스 레이어 메서드 (주간 대비 WoW 감지 및 Gemini 요약 포함)
         """
-        # 1. 인메모리 TTL 캐시 확인 (60초 만료 시간 적용)
-        cache_key = (product_id, period_days)
-        if cache_key in self._stats_cache:
-            cached_time, cached_data = self._stats_cache[cache_key]
-            if time.time() - cached_time < 60:
-                print(f"[DashboardService] 캐시 히트 (TTL 60s): {cache_key}")
-                return cached_data
+        # 1. 모듈 레벨 TTL 캐시 확인 (AI 브리핑: 1800초)
+        cache_key = ("ai_briefing", product_id, period_days)
+        hit, cached_data = dashboard_cache.get(cache_key, _TTL_AI_BRIEFING)
+        if hit:
+            print(f"[DashboardService] AI 브리핑 캐시 히트 (TTL {_TTL_AI_BRIEFING}s): {cache_key}")
+            return cached_data
 
         # 2. Cloud SQL에서 해당 제품의 리뷰 기간별 조회
         reviews_this = []
@@ -947,15 +958,21 @@ class DashboardService:
         }
 
         # 7. 인메모리 캐시 갱신
-        self._stats_cache[cache_key] = (time.time(), statistics_response)
-        print(f"[DashboardService] 신규 캐시 저장 완료: {cache_key}")
-        
+        dashboard_cache.set(cache_key, statistics_response)
+        print(f"[DashboardService] AI 브리핑 캐시 저장 완료: {cache_key}")
+
         return statistics_response
 
     def fetch_dashboard_summary(self, product_id: Optional[str], period_days: int) -> dict:
         """
         홈 대시보드 요약 지표 (전체 리뷰, 평균 별점, 부정 리뷰 비율, 우선 확인 요약) 및 WoW 비교
         """
+        cache_key = ("summary", product_id, period_days)
+        hit, cached = dashboard_cache.get(cache_key, _TTL_SUMMARY)
+        if hit:
+            print(f"[DashboardService] summary 캐시 히트 (TTL {_TTL_SUMMARY}s): {cache_key}")
+            return cached
+
         reviews_this, reviews_last = self._get_mock_reviews_split(product_id, period_days)
         if self.conn is not None:
             try:
@@ -1019,7 +1036,7 @@ class DashboardService:
                 "rating": r.get("rating")
             })
 
-        return {
+        result = {
             "total_reviews": this_agg["total_reviews"],
             "total_reviews_diff": review_diff,
             "average_rating": this_agg["average_rating"],
@@ -1027,13 +1044,22 @@ class DashboardService:
             "negative_reviews_count": neg_count_this,
             "negative_reviews_rate": neg_rate_this,
             "negative_reviews_rate_diff": neg_diff,
+            "priority_reviews_count": len(urgent_reviews),
             "urgent_reviews_summary": urgent_summary
         }
+        dashboard_cache.set(cache_key, result)
+        return result
 
     def fetch_trending_keywords(self, product_id: Optional[str], period_days: int) -> List[dict]:
         """
         Top 5 급상승/최다 언급 키워드 집계
         """
+        cache_key = ("trending_keywords", product_id, period_days)
+        hit, cached = dashboard_cache.get(cache_key, _TTL_KEYWORDS)
+        if hit:
+            print(f"[DashboardService] trending_keywords 캐시 히트 (TTL {_TTL_KEYWORDS}s): {cache_key}")
+            return cached
+
         keywords_count = {}
         if self.conn is not None:
             try:
@@ -1056,7 +1082,9 @@ class DashboardService:
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
                 cursor.close()
-                return [{"keyword": r[0], "count": r[1]} for r in rows]
+                result = [{"keyword": r[0], "count": r[1]} for r in rows]
+                dashboard_cache.set(cache_key, result)
+                return result
             except Exception as e:
                 print(f"[DashboardService.fetch_trending_keywords] DB 조회 실패, Mock 키워드로 폴백: {e}")
 
@@ -1066,12 +1094,20 @@ class DashboardService:
             for kw in r.get("keywords", []):
                 keywords_count[kw] = keywords_count.get(kw, 0) + 1
         sorted_kw = sorted(keywords_count.items(), key=lambda x: x[1], reverse=True)
-        return [{"keyword": k, "count": v} for k, v in sorted_kw[:5]]
+        result = [{"keyword": k, "count": v} for k, v in sorted_kw[:5]]
+        dashboard_cache.set(cache_key, result)
+        return result
 
     def fetch_negative_trend(self, product_id: Optional[str], period_days: int) -> List[dict]:
         """
         부정 리뷰 추이 시계열 데이터 가공 (Recharts 연동)
         """
+        cache_key = ("negative_trend", product_id, period_days)
+        hit, cached = dashboard_cache.get(cache_key, _TTL_TREND)
+        if hit:
+            print(f"[DashboardService] negative_trend 캐시 히트 (TTL {_TTL_TREND}s): {cache_key}")
+            return cached
+
         trend_dict = {}
         today = datetime.now().date()
         
@@ -1113,12 +1149,20 @@ class DashboardService:
                         trend_dict[r_date] += 1
 
         # Recharts 호환 배열 반환
-        return [{"date": k, "count": v} for k, v in sorted(trend_dict.items())]
+        result = [{"date": k, "count": v} for k, v in sorted(trend_dict.items())]
+        dashboard_cache.set(cache_key, result)
+        return result
 
     def fetch_insights(self, product_id: Optional[str], period_days: int) -> dict:
         """
         주요 분석 리스트 (성분/제형/용기 속성 점수 변동치 감지)
         """
+        cache_key = ("insights", product_id, period_days)
+        hit, cached = dashboard_cache.get(cache_key, _TTL_INSIGHTS)
+        if hit:
+            print(f"[DashboardService] insights 캐시 히트 (TTL {_TTL_INSIGHTS}s): {cache_key}")
+            return cached
+
         reviews_this, reviews_last = self._get_mock_reviews_split(product_id, period_days)
         if self.conn is not None:
             try:
@@ -1164,7 +1208,7 @@ class DashboardService:
         t_attr = this_agg["attribute_scores"]
         l_attr = last_agg["attribute_scores"]
 
-        return {
+        result = {
             "ingredients": {
                 "score": round(t_attr["ingredients"] * 100, 1),
                 "change": round((t_attr["ingredients"] - l_attr["ingredients"]) * 100, 1)
@@ -1178,6 +1222,8 @@ class DashboardService:
                 "change": round((t_attr["container"] - l_attr["container"]) * 100, 1)
             }
         }
+        dashboard_cache.set(cache_key, result)
+        return result
 
     def create_dashboard_report(self, product_id: Optional[str], period_days: int, report_type: str = "general") -> dict:
         """
@@ -1229,6 +1275,12 @@ class DashboardService:
         """
         리뷰 전체 건수 조회 - 분할 병렬 로딩의 청크 수 계산용
         """
+        cache_key = ("reviews_count", product_id, period_days, sentiment, q)
+        hit, cached = dashboard_cache.get(cache_key, _TTL_REVIEWS_COUNT)
+        if hit:
+            print(f"[DashboardService] reviews_count 캐시 히트 (TTL {_TTL_REVIEWS_COUNT}s): {cache_key}")
+            return cached
+
         if self.conn is not None:
             try:
                 cursor = self.conn.cursor()
@@ -1251,12 +1303,15 @@ class DashboardService:
 
                 where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
                 cursor.execute(f"SELECT COUNT(id) FROM public.reviews {where_str}", params)
-                count = cursor.fetchone()[0]
+                count = int(cursor.fetchone()[0])
                 cursor.close()
-                return int(count)
+                dashboard_cache.set(cache_key, count)
+                return count
             except Exception as e:
                 print(f"[DashboardService.fetch_reviews_count] DB 조회 실패, Mock 건수 반환: {e}")
-        return len(MOCK_REVIEWS)
+        count = len(MOCK_REVIEWS)
+        dashboard_cache.set(cache_key, count)
+        return count
 
     def fetch_reviews_advanced(
         self,
