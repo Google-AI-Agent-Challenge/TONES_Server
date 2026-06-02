@@ -1219,6 +1219,45 @@ class DashboardService:
             }
         }
 
+    def fetch_reviews_count(
+        self,
+        product_id: Optional[str] = None,
+        period_days: Optional[int] = None,
+        sentiment: Optional[str] = None,
+        q: Optional[str] = None,
+    ) -> int:
+        """
+        리뷰 전체 건수 조회 - 분할 병렬 로딩의 청크 수 계산용
+        """
+        if self.conn is not None:
+            try:
+                cursor = self.conn.cursor()
+                where_clauses = []
+                params = []
+
+                if product_id:
+                    where_clauses.append("product_id = %s::uuid")
+                    params.append(product_id)
+                if period_days:
+                    start_date = (datetime.now().date() - timedelta(days=period_days)).isoformat()
+                    where_clauses.append("review_date >= %s::date")
+                    params.append(start_date)
+                if sentiment:
+                    where_clauses.append("sentiment = %s::sentiment_type")
+                    params.append(sentiment)
+                if q:
+                    where_clauses.append("review_text ILIKE %s")
+                    params.append(f"%{q}%")
+
+                where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+                cursor.execute(f"SELECT COUNT(id) FROM public.reviews {where_str}", params)
+                count = cursor.fetchone()[0]
+                cursor.close()
+                return int(count)
+            except Exception as e:
+                print(f"[DashboardService.fetch_reviews_count] DB 조회 실패, Mock 건수 반환: {e}")
+        return len(MOCK_REVIEWS)
+
     def fetch_reviews_advanced(
         self,
         product_id: Optional[str] = None,
