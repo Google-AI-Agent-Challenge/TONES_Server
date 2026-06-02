@@ -1078,7 +1078,7 @@ class DashboardService:
                 if product_id:
                     sql += " AND r.product_id = %s"
                     params.append(product_id)
-                sql += " GROUP BY k.keyword ORDER BY cnt DESC LIMIT 5"
+                sql += " GROUP BY k.keyword ORDER BY cnt DESC LIMIT 6"
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
                 cursor.close()
