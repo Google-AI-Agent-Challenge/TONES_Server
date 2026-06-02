@@ -27,6 +27,8 @@
 | **Health** | `GET` | `/health` | ❌ | 서버 상태 확인 (Health Check) |
 | **Auth** | `POST` | `/api/v1/auth/login/access-token` | ❌ | OAuth2 호환 로그인 및 액세스 토큰 발급 |
 | | `POST` | `/api/v1/auth/signup` | ❌ | 신규 사용자 회원가입 |
+| | `POST` | `/api/v1/auth/find-email` | ❌ | 이름 기반 가입 이메일 찾기 |
+| | `POST` | `/api/v1/auth/find-password` | ❌ | 이메일 및 이름 기반 임시 비밀번호 재발급 |
 | **Users** | `GET` | `/api/v1/users/me` | 🔑 | 로그인한 현재 사용자의 정보 조회 |
 | **AI Search** | `POST` | `/api/v1/ai/search` | 🔑 | Pinecone 기반 시맨틱 검색 |
 | | `POST` | `/api/v1/ai/generate` | 🔑 | 컨텍스트 기반 AI 답변 생성 |
@@ -36,6 +38,12 @@
 | | `GET` | `/api/v1/dashboard/reviews/product/{product_id}` | ❌ | 특정 제품 리뷰 상세 목록 조회 |
 | | `POST` | `/api/v1/dashboard/reviews/bulk` | ❌ | 크롤링 리뷰 벌크 업로드 및 AI 파이프라인 처리 |
 | | `GET` | `/api/v1/dashboard/statistics` | 🔑 | 대시보드 통계 차트 데이터 및 AI 브리핑 조회 |
+| | `GET` | `/api/v1/dashboard/layout` | ❌ | 사용자 대시보드 위젯 고정 레이아웃 조회 |
+| | `POST` | `/api/v1/dashboard/layout` | ❌ | 사용자 대시보드 위젯 고정 레이아웃 저장/업데이트 |
+| | `POST` | `/api/v1/dashboard/reviews/ids` | ❌ | ID 배열 기반 매칭 리뷰 상세 목록 조회 |
+| **Compat** | `GET` | `/api/products` | ❌ | 프론트엔드 호환용 전체 제품 목록 조회 |
+| | `GET` | `/api/reviews` | ❌ | 프론트엔드 호환용 리뷰 조회 (분기 처리) |
+| | `GET` | `/api/reviews/batch` | ❌ | 프론트엔드 호환용 ID 기반 리뷰 조회 |
 
 ---
 
@@ -102,6 +110,49 @@
   - `400 Bad Request`: 이미 등록된 이메일 주소일 때
     ```json
     { "detail": "이미 존재하는 이메일입니다." }
+    ```
+
+#### `POST /api/v1/auth/find-email`
+- **설명**: 제공된 전체 이름(`full_name`)을 기준으로 가입된 이메일을 검색하여 반환합니다.
+- **인증**: 필요 없음 (❌)
+- **Request Body** (application/json):
+  ```json
+  {
+    "full_name": "홍길동"
+  }
+  ```
+- **Response** (200 OK):
+  ```json
+  {
+    "email": "user@example.com"
+  }
+  ```
+- **Error Responses**:
+  - `404 Not Found`: 해당 이름으로 가입된 사용자가 존재하지 않을 때
+    ```json
+    { "detail": "해당 이름으로 등록된 사용자를 찾을 수 없습니다." }
+    ```
+
+#### `POST /api/v1/auth/find-password`
+- **설명**: 가입된 이메일과 이름(`full_name`)을 기반으로 임시 비밀번호를 무작위 생성하여 업데이트한 뒤 발급합니다.
+- **인증**: 필요 없음 (❌)
+- **Request Body** (application/json):
+  ```json
+  {
+    "email": "user@example.com",
+    "full_name": "홍길동"
+  }
+  ```
+- **Response** (200 OK):
+  ```json
+  {
+    "temp_password": "aBcD12eF"
+  }
+  ```
+- **Error Responses**:
+  - `404 Not Found`: 이메일과 이름이 일치하는 사용자를 찾을 수 없을 때
+    ```json
+    { "detail": "이메일과 이름이 일치하는 사용자를 찾을 수 없습니다." }
     ```
 
 ---
@@ -323,3 +374,74 @@
     "ai_trend_briefing": "최근 7일간 '어성초 스팟패드 카밍터치'에 관한 긍정 리뷰 비율은 약 81%로 유지되고 있습니다. 주로 '빠른 트러블 진정 효과'에 극찬이 있으나, 일부 사용감 측면에서 '패드 에센스가 금방 마른다'는 의견이 20%가량 증가했으므로 패키징 및 액량 보강을 검토해볼 필요가 있습니다."
   }
   ```
+
+#### `GET /api/v1/dashboard/layout`
+- **설명**: 사용자 대시보드 위젯의 고정 레이아웃을 조회합니다.
+- **인증**: 필요 없음 (❌)
+- **Query Parameters**:
+  - `token` (string, required): 사용자 식별 토큰
+- **Response** (200 OK):
+  ```json
+  {
+    "pinned_widget": "widget-1,widget-2"
+  }
+  ```
+
+#### `POST /api/v1/dashboard/layout`
+- **설명**: 사용자 대시보드 위젯의 고정 레이아웃을 저장하거나 업데이트합니다.
+- **인증**: 필요 없음 (❌)
+- **Request Body** (application/json):
+  ```json
+  {
+    "token": "user-token-123",
+    "pinned_widget": "widget-1,widget-2"
+  }
+  ```
+- **Response** (200 OK):
+  ```json
+  {
+    "success": true
+  }
+  ```
+
+#### `POST /api/v1/dashboard/reviews/ids`
+- **설명**: 제공된 ID 배열과 일치하는 리뷰 상세 목록을 조회합니다.
+- **인증**: 필요 없음 (❌)
+- **Request Body** (application/json):
+  ```json
+  {
+    "ids": ["rev-uuid-1", "rev-uuid-2"]
+  }
+  ```
+- **Response** (200 OK):
+  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
+
+---
+
+### 6. Frontend Compatibility (프론트엔드 호환용 API)
+
+프론트엔드 레거시 코드 또는 특정 호환성 유지를 위해 제공되는 API 제품군입니다. 프리픽스로 `/api`를 사용합니다.
+
+#### `GET /api/products`
+- **설명**: 프론트엔드 호환용 전체 제품 목록을 조회합니다.
+- **인증**: 필요 없음 (❌)
+- **Response** (200 OK):
+  - [GET `/api/v1/dashboard/products`](#get-apiv1dashboardproducts)와 동일한 형식의 `ProductSchema` 배열 반환.
+
+#### `GET /api/reviews`
+- **설명**: 조건(특정 상품, 특정 키워드, 혹은 최신 리뷰)에 맞춰 분기 처리하여 리뷰 목록을 조회합니다.
+- **인증**: 필요 없음 (❌)
+- **Query Parameters**:
+  - `limit` (integer, optional, default: 20): 조회할 리뷰 수
+  - `product_id` (string, optional): 특정 상품 필터 ID. 지정 시 해당 상품 리뷰를 조회함.
+  - `keywords` (string, optional): 쉼표로 구분된 검색 키워드. 지정 시 키워드 매칭 리뷰를 조회함.
+- **Response** (200 OK):
+  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
+
+#### `GET /api/reviews/batch`
+- **설명**: 쉼표로 구분된 ID 문자열을 기반으로 리뷰 상세 목록을 조회합니다.
+- **인증**: 필요 없음 (❌)
+- **Query Parameters**:
+  - `ids` (string, required): 쉼표로 구분된 ID 목록 (예: `rev-1,rev-2,rev-3`)
+- **Response** (200 OK):
+  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
