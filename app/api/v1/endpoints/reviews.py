@@ -11,6 +11,27 @@ from app.services.ai_service import AIService
 router = APIRouter()
 
 
+@router.get("/count")
+def get_reviews_count(
+    product: Optional[str] = Query(None, description="특정 제품 필터 ID"),
+    period: Optional[int] = Query(None, description="조회 기간 범위 (일 수)"),
+    sentiment: Optional[str] = Query(None, description="감성 구분 (positive, neutral, negative)"),
+    q: Optional[str] = Query(None, description="검색어"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    current_user: dict = Depends(deps.get_current_user)
+):
+    """
+    리뷰 전체 건수 조회 - 프론트엔드 병렬 청크 로딩을 위한 총 레코드 수 반환 API (인증 필요)
+    """
+    total = dashboard_service.fetch_reviews_count(
+        product_id=product,
+        period_days=period,
+        sentiment=sentiment,
+        q=q,
+    )
+    return {"total": total}
+
+
 @router.get("", response_model=List[ReviewSchema])
 def get_reviews(
     product: Optional[str] = Query(None, description="특정 제품 필터 ID"),

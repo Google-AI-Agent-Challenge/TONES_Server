@@ -3,7 +3,7 @@
 이 문서는 **TONES** B2B AI 리뷰 분석 대시보드 백엔드 서비스(`TONES_Server`)의 공식 API 명세서입니다. 
 본 백엔드 시스템은 FastAPI 비동기 프레임워크와 GCP Cloud SQL pgvector 확장 및 Vertex AI(Gemini 2.0) 생태계를 기반으로 구축되었습니다.
 
-> **마지막 업데이트**: 2026-06-02 (모든 API 접두사 `/api` 통일 및 신규 도메인/스키마 완벽 동기화 반영)
+> **마지막 업데이트**: 2026-06-02 (`GET /api/reviews/count` 신규 추가 — 프론트엔드 병렬 청크 로딩 지원)
 
 ---
 
@@ -51,7 +51,8 @@
 ### 3. 리뷰 및 제품 분석 (리뷰분석 / 제품관리)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
 | :--- | :--- | :--- | :---: | :--- |
-| **Reviews** | `GET` | `/api/reviews` | 🔑 | 통합 검색 및 다중 조건 필터링 페이징 리뷰 목록 조회 |
+| **Reviews** | `GET` | `/api/reviews/count` | 🔑 | 필터 조건별 리뷰 총 건수 조회 (병렬 청크 로딩용) |
+| | `GET` | `/api/reviews` | 🔑 | 통합 검색 및 다중 조건 필터링 페이징 리뷰 목록 조회 |
 | | `GET` | `/api/reviews/attribute-scores` | 🔑 | 스킨케어 3대 품질 속성 점수 종합 기간 평균 수치 산출 |
 | | `POST` | `/api/reviews/export` | 🔑 | 현재 필터링된 모든 리뷰를 BOM-UTF8 프리미엄 CSV 스트림 전송 |
 | | `POST` | `/api/reviews/bulk` | ❌ | 크롤링 원시 데이터 대량 업로드 및 AI ABSA 파이프라인 적재 |
@@ -252,6 +253,21 @@
 ---
 
 ### 3. Reviews (리뷰 분석 및 제어)
+
+#### `GET /api/reviews/count`
+- **설명**: 현재 필터 조건(제품, 기간, 감성, 검색어)에 해당하는 리뷰 총 건수를 반환합니다. 프론트엔드의 병렬 청크 로딩 시 총 청크 수 계산에 사용됩니다.
+- **인증**: 🔑
+- **Query Parameters**:
+  - `product` (string, optional): 제품 UUID
+  - `period` (integer, optional): 분석 기간 (일)
+  - `sentiment` (string, optional): 감성 구분 (`positive`, `neutral`, `negative`)
+  - `q` (string, optional): 검색어 (리뷰 본문 LIKE 검색)
+- **Response** (200 OK):
+  ```json
+  {
+    "total": 2150
+  }
+  ```
 
 #### `GET /api/reviews`
 - **설명**: 다중 필터링 조건 및 검색어가 결합된 고성능 동적 쿼리 페이징 리뷰 리스트를 반환합니다. (GCP Cloud SQL PostgreSQL 최적화 작동)
