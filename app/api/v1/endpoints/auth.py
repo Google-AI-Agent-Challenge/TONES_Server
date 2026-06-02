@@ -5,7 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from app.core.config import settings
 from app.core.security import create_access_token, verify_password
 from app.api import deps
-from app.schemas.auth import Token
+from app.schemas.auth import Token, FindEmailRequest, FindEmailResponse, FindPasswordRequest, FindPasswordResponse
 from app.schemas.user import User, UserCreate
 from app.services.user_service import UserService
 
@@ -57,3 +57,38 @@ def register_user(
         )
     new_user = user_service.create(user_in)
     return new_user
+
+
+@router.post("/find-email", response_model=FindEmailResponse)
+def find_email(
+    payload: FindEmailRequest,
+    user_service: UserService = Depends(deps.get_user_service)
+) -> Any:
+    """
+    이름(full_name)을 기반으로 가입된 이메일을 조회하는 API
+    """
+    email = user_service.find_email_by_name(payload.full_name)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 이름으로 등록된 사용자를 찾을 수 없습니다."
+        )
+    return FindEmailResponse(email=email)
+
+
+@router.post("/find-password", response_model=FindPasswordResponse)
+def find_password(
+    payload: FindPasswordRequest,
+    user_service: UserService = Depends(deps.get_user_service)
+) -> Any:
+    """
+    이메일과 이름을 기반으로 임시 비밀번호를 재설정하여 발급하는 API
+    """
+    temp_password = user_service.reset_password_temp(payload.email, payload.full_name)
+    if not temp_password:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="이메일과 이름이 일치하는 사용자를 찾을 수 없습니다."
+        )
+    return FindPasswordResponse(temp_password=temp_password)
+

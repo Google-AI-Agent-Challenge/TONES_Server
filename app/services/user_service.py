@@ -76,3 +76,67 @@ class UserService:
         }
         self._local_db[obj_in.email] = new_user
         return new_user
+
+    def find_email_by_name(self, full_name: str) -> str | None:
+        if self.conn is not None:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute(
+                    "SELECT email FROM public.users WHERE full_name = %s",
+                    [full_name]
+                )
+                row = cursor.fetchone()
+                cursor.close()
+                if row:
+                    return row[0]
+            except Exception as e:
+                print(f"[UserService.find_email_by_name] Cloud SQL 조회 오류 (오프라인 폴백): {e}")
+        
+        # 오프라인 폴백 처리
+        for user in self._local_db.values():
+            if user.get("full_name") == full_name:
+                return user["email"]
+        return None
+
+    def reset_password_temp(self, email: str, full_name: str) -> str | None:
+        # 임시 비밀번호 생성 (간단하게 8자리 문자열)
+        import secrets
+        import string
+        alphabet = string.ascii_letters + string.digits
+        temp_password = ''.join(secrets.choice(alphabet) for _ in range(8))
+        hashed_password = get_password_hash(temp_password)
+
+        if self.conn is not None:
+            try:
+                cursor = self.conn.cursor()
+                # 사용자가 존재하는지 먼저 검증
+                cursor.execute(
+                    "SELECT id FROM public.users WHERE email = %s AND full_name = %s",
+                    [email, full_name]
+                )
+                exists = cursor.fetchone()
+                if not exists:
+                    cursor.close()
+                    return None
+                
+                cursor.execute(
+                    "UPDATE public.users SET hashed_password = %s WHERE email = %s AND full_name = %s",
+                    [hashed_password, email, full_name]
+                )
+                self.conn.commit()
+                cursor.close()
+                return temp_password
+            except Exception as e:
+                print(f"[UserService.reset_password_temp] Cloud SQL 업데이트 오류 (오프라인 폴백): {e}")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+
+        # 오프라인 폴백 처리
+        user = self._local_db.get(email)
+        if user and user.get("full_name") == full_name:
+            user["hashed_password"] = hashed_password
+            return temp_password
+        return None
+
