@@ -23,6 +23,9 @@ class Settings(BaseSettings):
 
     # Google Gemini Config
     GEMINI_API_KEY: Optional[str] = None
+
+    # Google Docs API Config (GCP 서비스 계정 JSON 키, 한 줄 JSON 문자열 형태)
+    GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
     
     # CORS Config
     BACKEND_CORS_ORIGINS: List[str] = ["*"]

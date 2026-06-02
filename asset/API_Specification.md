@@ -47,6 +47,7 @@
 | | `GET` | `/api/dashboard/insights` | 🔑 | 3대 화장품 품질 만족도(성분/제형/용기) WoW 변동율 |
 | | `GET` | `/api/dashboard/ai-briefing` | 🔑 | Gemini 2.0-flash 기반의 대시보드 실시간 AI 트렌드 보고 브리핑 |
 | | `POST` | `/api/dashboard/report` | 🔑 | AI 분석 요약 보고서(Markdown) 및 엑셀 로우 데이터 패키지 생성 |
+| | `POST` | `/api/dashboard/export/docs` | 🔑 | AI 분석 Markdown 기반 Google Docs 문서 생성 및 공유 링크 반환 |
 
 ### 3. 리뷰 및 제품 분석 (리뷰분석 / 제품관리)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
@@ -247,6 +248,38 @@
       "insights": { ... },
       "keywords": [ ... ]
     }
+  }
+  ```
+
+#### `POST /api/dashboard/export/docs`
+- **설명**: 대시보드의 AI 분석 요약 데이터(Markdown)를 기반으로 Google Docs API를 호출하여 새로운 구글 문서를 생성하고, 해당 문서의 공유 링크를 프론트엔드로 반환합니다. (GCP 서비스 계정 활용)
+- **인증**: 🔑
+- **Request Body** (application/json):  
+  프론트엔드에서 현재 보고 있는 대시보드의 필터 상태와 리포트 제목을 묶어서 보냅니다.
+  ```json
+  {
+    "title": "2026-06 화장품 VOC AI 분석 리포트",
+    "period": 30,
+    "product_id": "all",
+    "report_markdown": "# TONES AI 분석 보고서\n\n- **생성시점**: 2026-06-02...\n (미리 생성된 마크다운, 생략 시 자동 구성)"
+  }
+  ```
+- **Response** (200 OK):  
+  백엔드에서 구글 문서를 성공적으로 생성한 뒤, 프론트엔드에서 새 창으로 띄워줄 수 있도록 `document_url`을 돌려줍니다.
+  ```json
+  {
+    "success": true,
+    "message": "구글 문서가 성공적으로 생성되었습니다.",
+    "document_id": "1A2B3C4D5E6F7G8H9I0J...",
+    "document_url": "https://docs.google.com/document/d/1A2B3C4D5E6F7G8H9I0J/edit"
+  }
+  ```
+- **Error Response** (500 Internal Server Error):  
+  GCP 권한 문제나 구글 API 할당량 초과 시 발생할 수 있는 에러입니다.
+  ```json
+  {
+    "success": false,
+    "detail": "Google Docs API 호출 중 오류가 발생했습니다. GCP 서비스 계정 권한을 확인해주세요."
   }
   ```
 
