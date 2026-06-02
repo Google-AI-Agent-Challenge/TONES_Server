@@ -3,6 +3,8 @@
 이 문서는 **TONES** 서비스의 백엔드(`TONES_Server`) API 명세서입니다. 
 본 API는 FastAPI로 구현되어 있으며 기본 프리픽스는 `/api/v1` 입니다.
 
+> **마지막 업데이트**: 2026-06-02 (실제 구현 코드 기반 동기화)
+
 ---
 
 ## 📌 공통 사양
@@ -18,6 +20,8 @@
   Authorization: Bearer <Your_JWT_Access_Token>
   ```
 
+> ⚠️ **[프로토타입 개발 주의]** 현재 `app/api/deps.py`의 `get_current_user()`가 JWT 검증을 비활성화하고 테스트용 더미 사용자(`test@example.com`)를 항상 반환하도록 설정되어 있다. 🔑 표시 API도 실질적으로 토큰 없이 호출 가능하며, 프로덕션 배포 전 반드시 복원이 필요하다.
+
 ---
 
 ## 📊 API 요약 목록
@@ -30,14 +34,14 @@
 | | `POST` | `/api/v1/auth/find-email` | ❌ | 이름 기반 가입 이메일 찾기 |
 | | `POST` | `/api/v1/auth/find-password` | ❌ | 이메일 및 이름 기반 임시 비밀번호 재발급 |
 | **Users** | `GET` | `/api/v1/users/me` | 🔑 | 로그인한 현재 사용자의 정보 조회 |
-| **AI Search** | `POST` | `/api/v1/ai/search` | 🔑 | Pinecone 기반 시맨틱 검색 |
-| | `POST` | `/api/v1/ai/generate` | 🔑 | 컨텍스트 기반 AI 답변 생성 |
+| **AI Search** | `POST` | `/api/v1/ai/search` | 🔑 | Cloud SQL pgvector 기반 시맨틱 검색 |
+| | `POST` | `/api/v1/ai/generate` | 🔑 | Vertex AI(Gemini) 기반 AI 답변 생성 |
 | **Dashboard** | `GET` | `/api/v1/dashboard/products` | ❌ | 대시보드용 전체 제품 목록 조회 |
 | | `GET` | `/api/v1/dashboard/reviews/latest` | ❌ | 최신 부정/일반 리뷰 목록 조회 |
 | | `GET` | `/api/v1/dashboard/reviews/search` | ❌ | 키워드 기반 리뷰 필터링/검색 |
 | | `GET` | `/api/v1/dashboard/reviews/product/{product_id}` | ❌ | 특정 제품 리뷰 상세 목록 조회 |
 | | `POST` | `/api/v1/dashboard/reviews/bulk` | ❌ | 크롤링 리뷰 벌크 업로드 및 AI 파이프라인 처리 |
-| | `GET` | `/api/v1/dashboard/statistics` | 🔑 | 대시보드 통계 차트 데이터 및 AI 브리핑 조회 |
+| | `GET` | `/api/v1/dashboard/statistics` | 🔑* | 대시보드 통계 차트 데이터 및 AI 브리핑 조회 |
 | | `GET` | `/api/v1/dashboard/layout` | ❌ | 사용자 대시보드 위젯 고정 레이아웃 조회 |
 | | `POST` | `/api/v1/dashboard/layout` | ❌ | 사용자 대시보드 위젯 고정 레이아웃 저장/업데이트 |
 | | `POST` | `/api/v1/dashboard/reviews/ids` | ❌ | ID 배열 기반 매칭 리뷰 상세 목록 조회 |
@@ -81,9 +85,13 @@
   }
   ```
 - **Error Responses**:
-  - `400 Bad Request`: 이메일 또는 비밀번호가 불일치하거나, 비활성화된 계정일 때
+  - `400 Bad Request`: 이메일 또는 비밀번호가 불일치할 때
     ```json
     { "detail": "이메일 또는 비밀번호가 잘못되었습니다." }
+    ```
+  - `400 Bad Request`: 비활성화된 계정일 때
+    ```json
+    { "detail": "비활성화된 사용자 계정입니다." }
     ```
 
 #### `POST /api/v1/auth/signup`
@@ -178,8 +186,12 @@
 
 ### 4. AI Search (AI 분석 및 검색)
 
+> **벡터 검색 스택**: Pinecone에서 **GCP Cloud SQL PostgreSQL + pgvector** 로 전환됨.  
+> 임베딩은 **Vertex AI `text-embedding-004`** (폴백: Gemini HTTP API)를 사용하고,  
+> 텍스트 생성은 **Vertex AI `gemini-2.0-flash`** (폴백: `gemini-1.5-flash` → HTTP API)를 사용한다.
+
 #### `POST /api/v1/ai/search`
-- **설명**: Pinecone 벡터 데이터베이스에 입력 쿼리를 전달하여 질문과 유사한 제품 리뷰 또는 데이터를 검색합니다.
+- **설명**: 입력 쿼리를 Vertex AI 임베딩으로 변환한 뒤, Cloud SQL PostgreSQL의 pgvector 확장(`<=>` 코사인 거리 연산자)을 이용해 `reviews` 테이블에서 의미적으로 유사한 리뷰를 검색합니다.
 - **인증**: JWT Bearer 토큰 필요 (🔑)
 - **Request Body** (application/json):
   ```json
@@ -187,13 +199,13 @@
     "query": "피부가 따갑고 민감해졌을 때 쓰기 좋은 순한 토너패드 추천해줘",
     "top_k": 5,
     "filter": {
-      "brand_name": "아비브"
+      "product_id": "prod-uuid-1"
     }
   }
   ```
   - `query` (string, required): 검색할 자연어 질문/키워드
-  - `top_k` (integer, optional, default: 5): 반환할 유사 아이템 개수
-  - `filter` (object, optional): 메타데이터 필터 조건
+  - `top_k` (integer, optional, default: 5): 반환할 유사 리뷰 개수
+  - `filter` (object, optional): 필터 조건. 현재 `product_id` 키만 지원
 - **Response** (200 OK):
   ```json
   {
@@ -203,18 +215,22 @@
         "id": "review-uuid-1",
         "score": 0.892,
         "metadata": {
-          "product_name": "어성초 스팟패드 카밍터치",
           "review_text": "얼굴 뒤집어졌을 때 쓰면 진정에 엄청 좋아요. 순하고 트러블 안 남.",
+          "rating": 5,
+          "review_date": "2026-05-30",
           "sentiment": "positive",
-          "rating": 5
+          "issue_type": "없음",
+          "ai_summary": "트러블 진정 효과가 우수하고 순한 성분으로 민감 피부에 적합함"
         }
       }
     ]
   }
   ```
+  - `score`: pgvector 코사인 유사도 (`1 - 코사인거리`, 1.0에 가까울수록 유사)
+  - `metadata` 필드는 `reviews` 테이블의 실제 컬럼 기반 (`review_text`, `rating`, `review_date`, `sentiment`, `issue_type`, `ai_summary`)
 
 #### `POST /api/v1/ai/generate`
-- **설명**: 프론트엔드에서 수집된 컨텍스트를 기반으로 LLM 답변을 만들어 제공합니다.
+- **설명**: 제공된 컨텍스트를 프롬프트에 주입하여 Vertex AI Gemini 모델로 한국어 답변을 생성합니다.
 - **인증**: JWT Bearer 토큰 필요 (🔑)
 - **Request Body** (application/json):
   ```json
@@ -224,7 +240,7 @@
   }
   ```
   - `prompt` (string, required): AI에게 수행시킬 질문 또는 명령어
-  - `context` (string, optional): 답변 생성에 주입할 참고 컨텍스트(텍스트 정보)
+  - `context` (string, optional): 답변 생성에 주입할 참고 컨텍스트
 - **Response** (200 OK):
   ```json
   {
@@ -309,7 +325,7 @@
 #### `POST /api/v1/dashboard/reviews/bulk`
 - **설명**: 크롤러 및 배치 스크립트를 통해 수집된 다수의 원본 리뷰 데이터를 대량으로 업로드합니다. 백엔드의 AI 분석 파이프라인(감성 분석, 키워드 추출, 이슈 타입 결정 등)을 트리거하여 정제 과정을 거친 뒤 DB에 최종 반영합니다.
 - **인증**: 현재 별도 인증 미적용 (❌)
-- **Request Body** (application/json):
+- **Request Body** (application/json) — `ReviewCreate` 스키마 배열:
   ```json
   [
     {
@@ -324,6 +340,14 @@
     }
   ]
   ```
+  - `product_id` (string, **required**): 대상 제품 UUID
+  - `content` (string, **required**): 리뷰 원문 텍스트
+  - `rating` (integer, **required**): 평점 (1~5)
+  - `skin_type` (string, optional): 피부 타입
+  - `reviewer_type` (string, optional): 리뷰어 유형
+  - `source` (string, optional, default: `"올리브영"`): 리뷰 출처
+  - `review_date` (string, optional): 리뷰 작성일 (YYYY-MM-DD)
+  - `review_id` (string, optional): 출처 플랫폼 고유 ID (중복 방지용)
 - **Response** (201 Created):
   ```json
   {
@@ -336,7 +360,7 @@
 
 #### `GET /api/v1/dashboard/statistics`
 - **설명**: 대시보드 시각화 차트(Recharts 연동 등)용 전체 집계 데이터와 LLM이 작성한 기간별 종합 AI 트렌드 리포트를 한 번에 받아오는 코어 API입니다.
-- **인증**: JWT Bearer 토큰 필요 (🔑)
+- **인증**: JWT Bearer 토큰 명시 (🔑*) — 단, 현재 프로토타입 환경에서는 토큰 없이도 호출 가능 (공통 주의사항 참고)
 - **Query Parameters**:
   - `product_id` (string, optional): 지정할 시 특정 제품에 국한된 통계를 제공하며, 비워둘 시 전체 취급 제품의 총합 합산 결과를 리턴합니다.
   - `period` (integer, optional, default: 7): 통계 분석을 집계할 조회 기간 범위 (일(day) 수 단위)
