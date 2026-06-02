@@ -5,6 +5,8 @@ class UserBase(BaseModel):
     email: EmailStr | None = None
     full_name: str | None = None
     is_active: bool = True
+    role: str | None = "manager"
+    last_login_at: str | None = None
 
 
 class UserCreate(UserBase):

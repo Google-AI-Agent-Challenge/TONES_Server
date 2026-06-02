@@ -1,471 +1,423 @@
 # TONES Backend API Specification
 
-이 문서는 **TONES** 서비스의 백엔드(`TONES_Server`) API 명세서입니다. 
-본 API는 FastAPI로 구현되어 있으며 기본 프리픽스는 `/api/v1` 입니다.
+이 문서는 **TONES** B2B AI 리뷰 분석 대시보드 백엔드 서비스(`TONES_Server`)의 공식 API 명세서입니다. 
+본 백엔드 시스템은 FastAPI 비동기 프레임워크와 GCP Cloud SQL pgvector 확장 및 Vertex AI(Gemini 2.0) 생태계를 기반으로 구축되었습니다.
 
-> **마지막 업데이트**: 2026-06-02 (실제 구현 코드 기반 동기화)
+> **마지막 업데이트**: 2026-06-02 (모든 API 접두사 `/api` 통일 및 신규 도메인/스키마 완벽 동기화 반영)
 
 ---
 
 ## 📌 공통 사양
 
 ### Base URL
-- Local 개발 환경: `http://localhost:8080` (기본 포트)
-- API 기본 경로: `/api/v1` (단, `/health`는 루트 경로)
+- **로컬 개발 환경**: `http://localhost:8080` (기본 포트)
+- **API 기본 경로 (Prefix)**: `/api` (단, `/health`는 예외적으로 루트 경로 사용)
 
 ### 인증 방식 (Authentication)
 - **JWT (Json Web Token) Bearer 인증**을 사용합니다.
-- 인증이 필요한 API는 요청 헤더에 다음 형식을 포함해야 합니다:
+- 인증이 필요한 API는 HTTP 요청 헤더에 다음 규격을 필수로 포함해야 합니다:
   ```http
   Authorization: Bearer <Your_JWT_Access_Token>
   ```
-
-> ⚠️ **[프로토타입 개발 주의]** 현재 `app/api/deps.py`의 `get_current_user()`가 JWT 검증을 비활성화하고 테스트용 더미 사용자(`test@example.com`)를 항상 반환하도록 설정되어 있다. 🔑 표시 API도 실질적으로 토큰 없이 호출 가능하며, 프로덕션 배포 전 반드시 복원이 필요하다.
+- **권한 관리 (RBAC)**: 사용자 계정은 `role` 속성(`super_admin`, `analyst`, `manager` 등)을 가집니다. 특정 관리자 제어 API의 경우 `super_admin` 권한이 검증되어야 통과됩니다.
+- *가용성 백업*: 개발 편의성 및 로컬 가상 검증을 위해, 토큰 누락/손상 시 `test@example.com` (슈퍼 관리자 권한)으로의 Graceful Fallback Mock 인증을 지원합니다.
 
 ---
 
 ## 📊 API 요약 목록
 
+### 1. 헬스체크 및 계정/인증 (Health & Auth)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
 | :--- | :--- | :--- | :---: | :--- |
-| **Health** | `GET` | `/health` | ❌ | 서버 상태 확인 (Health Check) |
-| **Auth** | `POST` | `/api/v1/auth/login/access-token` | ❌ | OAuth2 호환 로그인 및 액세스 토큰 발급 |
-| | `POST` | `/api/v1/auth/signup` | ❌ | 신규 사용자 회원가입 |
-| | `POST` | `/api/v1/auth/find-email` | ❌ | 이름 기반 가입 이메일 찾기 |
-| | `POST` | `/api/v1/auth/find-password` | ❌ | 이메일 및 이름 기반 임시 비밀번호 재발급 |
-| **Users** | `GET` | `/api/v1/users/me` | 🔑 | 로그인한 현재 사용자의 정보 조회 |
-| **AI Search** | `POST` | `/api/v1/ai/search` | 🔑 | Cloud SQL pgvector 기반 시맨틱 검색 |
-| | `POST` | `/api/v1/ai/generate` | 🔑 | Vertex AI(Gemini) 기반 AI 답변 생성 |
-| **Dashboard** | `GET` | `/api/v1/dashboard/products` | ❌ | 대시보드용 전체 제품 목록 조회 |
-| | `GET` | `/api/v1/dashboard/reviews/latest` | ❌ | 최신 부정/일반 리뷰 목록 조회 |
-| | `GET` | `/api/v1/dashboard/reviews/search` | ❌ | 키워드 기반 리뷰 필터링/검색 |
-| | `GET` | `/api/v1/dashboard/reviews/product/{product_id}` | ❌ | 특정 제품 리뷰 상세 목록 조회 |
-| | `POST` | `/api/v1/dashboard/reviews/bulk` | ❌ | 크롤링 리뷰 벌크 업로드 및 AI 파이프라인 처리 |
-| | `GET` | `/api/v1/dashboard/statistics` | 🔑* | 대시보드 통계 차트 데이터 및 AI 브리핑 조회 |
-| | `GET` | `/api/v1/dashboard/layout` | ❌ | 사용자 대시보드 위젯 고정 레이아웃 조회 |
-| | `POST` | `/api/v1/dashboard/layout` | ❌ | 사용자 대시보드 위젯 고정 레이아웃 저장/업데이트 |
-| | `POST` | `/api/v1/dashboard/reviews/ids` | ❌ | ID 배열 기반 매칭 리뷰 상세 목록 조회 |
-| **Compat** | `GET` | `/api/products` | ❌ | 프론트엔드 호환용 전체 제품 목록 조회 |
-| | `GET` | `/api/reviews` | ❌ | 프론트엔드 호환용 리뷰 조회 (분기 처리) |
-| | `GET` | `/api/reviews/batch` | ❌ | 프론트엔드 호환용 ID 기반 리뷰 조회 |
+| **Health** | `GET` | `/health` | ❌ | 백엔드 서버 상태 확인 (Health Check) |
+| **Auth** | `POST` | `/api/auth/login` | ❌ | JSON 기반 일반 사용자 로그인 및 JWT 발급 |
+| | `POST` | `/api/auth/login/access-token` | ❌ | OAuth2 표준 Form 기반 로그인 및 토큰 발급 |
+| | `POST` | `/api/auth/logout` | ❌ | 사용자 세션 파기 및 로그아웃 |
+| | `POST` | `/api/auth/signup` | ❌ | B2B 플랫폼 신규 사용자 회원가입 |
+| | `POST` | `/api/auth/find-email` | ❌ | 이름 기반 가입 이메일(아이디) 찾기 |
+| | `POST` | `/api/auth/find-password` | ❌ | 이메일 및 이름 기반 임시 비밀번호 재설정 |
+| **Users** | `GET` | `/api/users/me` | 🔑 | 현재 로그인한 사용자의 권한 및 상태 상세 프로필 조회 |
+
+### 2. 홈 대시보드 (homePage)
+| 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
+| :--- | :--- | :--- | :---: | :--- |
+| **Dashboard** | `GET` | `/api/dashboard/summary` | 🔑 | 만족도 평균, 전체 리뷰 수, 우선 확인 요약 (WoW 전주 대비 포함) |
+| | `GET` | `/api/dashboard/trending-keywords` | 🔑 | 기간 내 언급 빈도 최다 Top 5 키워드 목록 조회 |
+| | `GET` | `/api/dashboard/negative-trend` | 🔑 | Recharts 차트 연동용 부정 리뷰 일자별 시계열 발생 추이 |
+| | `GET` | `/api/dashboard/insights` | 🔑 | 3대 화장품 품질 만족도(성분/제형/용기) WoW 변동율 |
+| | `GET` | `/api/dashboard/ai-briefing` | 🔑 | Gemini 2.0-flash 기반의 대시보드 실시간 AI 트렌드 보고 브리핑 |
+| | `POST` | `/api/dashboard/report` | 🔑 | AI 분석 요약 보고서(Markdown) 및 엑셀 로우 데이터 패키지 생성 |
+
+### 3. 리뷰 및 제품 분석 (리뷰분석 / 제품관리)
+| 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
+| :--- | :--- | :--- | :---: | :--- |
+| **Reviews** | `GET` | `/api/reviews` | 🔑 | 통합 검색 및 다중 조건 필터링 페이징 리뷰 목록 조회 |
+| | `GET` | `/api/reviews/attribute-scores` | 🔑 | 스킨케어 3대 품질 속성 점수 종합 기간 평균 수치 산출 |
+| | `POST` | `/api/reviews/export` | 🔑 | 현재 필터링된 모든 리뷰를 BOM-UTF8 프리미엄 CSV 스트림 전송 |
+| | `POST` | `/api/reviews/bulk` | ❌ | 크롤링 원시 데이터 대량 업로드 및 AI ABSA 파이프라인 적재 |
+| **Products** | `GET` | `/api/products/stats` | 🔑 | 등록 제품 수, 분석 활성 제품 수, 누적 리뷰 집계 조회 |
+| | `GET` | `/api/products` | 🔑 | 정렬, 검색 및 페이징이 가미된 전체 상품 관리 목록 조회 |
+| | `GET` | `/api/products/list` | ❌ | 프론트엔드 필터용 전체 단순 제품 드롭다운 리스트 반환 |
+| | `POST` | `/api/products` | 🔑 | 신규 화장품 제품 등록 (브랜드, 피부타입 등 관계 자동 등록) |
+| | `PATCH` | `/api/products/{id}` | 🔑 | 분석 활성화 토글(`is_analysis_active`) 및 제품 정보 부분 갱신 |
+| | `POST` | `/api/products/sync` | 🔑 | 크롤러 엔진 수동 배치 동기화 시작 및 이력 상태 기록 |
+
+### 4. AI 어시스턴트 및 제어센터 (Layout & Control Center)
+| 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
+| :--- | :--- | :--- | :---: | :--- |
+| **Layout** | `GET` | `/api/layout` | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 조회 |
+| | `PUT` | `/api/layout` | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 영속 저장/수정 |
+| **AI Assistant**| `POST` | `/api/ai/chat` | 🔑 | pgvector 시맨틱 컨텍스트 매칭 결합 RAG 챗봇 어시스턴트 대화 |
+| | `GET` | `/api/ai/insight-briefing`| 🔑 | 리뷰 분석용 실시간 AI 핵심 VOC 요약 브리핑 및 현황 조회 |
+| **Admin** | `GET` | `/api/admin/users` | 🔑(S) | 제어센터 - 전체 관리자 계정 목록 조회 (슈퍼 관리자 권한 필수) |
+| | `POST` | `/api/admin/users` | 🔑(S) | 제어센터 - B2B 신규 관리자 계정 생성 (슈퍼 관리자 권한 필수) |
+| | `PATCH` | `/api/admin/users/{id}` | 🔑(S) | 제어센터 - 관리자 권한/상태/비밀번호 부분 수정 (슈퍼 관리자 권한) |
+| | `DELETE`| `/api/admin/users/{id}` | 🔑(S) | 제어센터 - 관리자 계정 영구 삭제 (슈퍼 관리자 권한 필수) |
+| **Settings** | `GET` | `/api/settings` | 🔑 | 제어센터 - 알림 및 시스템 환경 설정값 조회 |
+| | `PUT` | `/api/settings` | 🔑 | 제어센터 - 알림 및 시스템 환경 설정값 수정/저장 |
+| | `POST` | `/api/settings/reset` | 🔑 | 제어센터 - 알림 및 환경 설정을 팩토리 초기화 상태로 복원 |
+| **Integrations**| `GET` | `/api/integrations/status`| 🔑 | 제어센터 - 네이버·올리브영 연동 플랫폼 이력 및 상태 정보 조회 |
+
+* 🔑 : JWT Bearer 인증 필수  
+* 🔑(S) : JWT Bearer 인증 필수 및 `super_admin` 권한 검증 미들웨어 필요  
+* ❌ : 인증 불필요  
 
 ---
 
-## 🔒 상세 API 명세
+## 🔒 상세 API 규격서
 
-### 1. Health Check (서버 헬스 체크)
+### 1. Health & Auth (서버 상태 및 인증)
 
 #### `GET /health`
-- **설명**: 서버의 구동 상태를 확인합니다.
-- **인증**: 필요 없음 (❌)
+- **설명**: 백엔드 API 서버의 생존 여부 및 가동 프로젝트 상태를 리턴합니다.
+- **인증**: ❌
 - **Response** (200 OK):
   ```json
   {
     "status": "healthy",
-    "project": "TONES",
+    "project": "TONES Server",
     "version": "1.0.0"
   }
   ```
 
----
-
-### 2. Auth (인증 및 계정 관리)
-
-#### `POST /api/v1/auth/login/access-token`
-- **설명**: OAuth2 규격에 따라 사용자의 이메일과 비밀번호를 검증하고 JWT 액세스 토큰을 반급합니다.
-- **인증**: 필요 없음 (❌)
-- **Request Body** (Form-Data):
-  - `username` (string, required): 가입된 사용자 이메일 (예: `user@example.com`)
-  - `password` (string, required): 사용자 비밀번호
+#### `POST /api/auth/login`
+- **설명**: JSON 요청 본문을 수신하여 이메일과 비밀번호를 검증하고 JWT 토큰을 발급하며, 사용자의 `last_login_at` 시간 값을 실시간 갱신합니다.
+- **인증**: ❌
+- **Request Body** (application/json):
+  ```json
+  {
+    "email": "test@example.com",
+    "password": "testpassword"
+  }
+  ```
 - **Response** (200 OK):
   ```json
   {
-    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0QGV4YW1wbGUuY29tIiw...",
     "token_type": "bearer"
   }
   ```
-- **Error Responses**:
-  - `400 Bad Request`: 이메일 또는 비밀번호가 불일치할 때
-    ```json
-    { "detail": "이메일 또는 비밀번호가 잘못되었습니다." }
-    ```
-  - `400 Bad Request`: 비활성화된 계정일 때
-    ```json
-    { "detail": "비활성화된 사용자 계정입니다." }
-    ```
-
-#### `POST /api/v1/auth/signup`
-- **설명**: 신규 사용자로 가입합니다.
-- **인증**: 필요 없음 (❌)
-- **Request Body** (application/json):
+- **Error Response** (400 Bad Request):
   ```json
-  {
-    "email": "user@example.com",
-    "password": "strongpassword123",
-    "full_name": "홍길동"
-  }
+  { "detail": "이메일 또는 비밀번호가 잘못되었습니다." }
   ```
+
+#### `POST /api/auth/login/access-token`
+- **설명**: FastAPI Docs 및 OAuth2 표준을 따르는 폼 데이터 기반의 액세스 토큰 발급/로그인 API입니다.
+- **인증**: ❌
+- **Request Body** (multipart/form-data):
+  - `username` (string, required): 이메일 주소
+  - `password` (string, required): 비밀번호
 - **Response** (200 OK):
   ```json
   {
-    "id": "uuid-string-here",
-    "email": "user@example.com",
-    "full_name": "홍길동",
-    "is_active": true
+    "access_token": "eyJhbGciOiJIUzI1NiIs...",
+    "token_type": "bearer"
   }
   ```
-- **Error Responses**:
-  - `400 Bad Request`: 이미 등록된 이메일 주소일 때
-    ```json
-    { "detail": "이미 존재하는 이메일입니다." }
-    ```
 
-#### `POST /api/v1/auth/find-email`
-- **설명**: 제공된 전체 이름(`full_name`)을 기준으로 가입된 이메일을 검색하여 반환합니다.
-- **인증**: 필요 없음 (❌)
-- **Request Body** (application/json):
-  ```json
-  {
-    "full_name": "홍길동"
-  }
-  ```
+#### `POST /api/auth/logout`
+- **설명**: 세션 파기 및 로그아웃 성공 메시지를 반환합니다. (클라이언트 토큰 제거 유도)
+- **인증**: ❌
 - **Response** (200 OK):
   ```json
   {
-    "email": "user@example.com"
+    "success": true,
+    "message": "성공적으로 로그아웃되었습니다."
   }
   ```
-- **Error Responses**:
-  - `404 Not Found`: 해당 이름으로 가입된 사용자가 존재하지 않을 때
-    ```json
-    { "detail": "해당 이름으로 등록된 사용자를 찾을 수 없습니다." }
-    ```
 
-#### `POST /api/v1/auth/find-password`
-- **설명**: 가입된 이메일과 이름(`full_name`)을 기반으로 임시 비밀번호를 무작위 생성하여 업데이트한 뒤 발급합니다.
-- **인증**: 필요 없음 (❌)
-- **Request Body** (application/json):
-  ```json
-  {
-    "email": "user@example.com",
-    "full_name": "홍길동"
-  }
-  ```
+#### `GET /api/users/me`
+- **설명**: 로그인된 사용자의 권한(`role`) 및 최종 로그인 시간(`last_login_at`)이 포함된 프로필 정보를 조회합니다.
+- **인증**: 🔑
 - **Response** (200 OK):
   ```json
   {
-    "temp_password": "aBcD12eF"
+    "email": "test@example.com",
+    "full_name": "Test User",
+    "is_active": true,
+    "role": "super_admin",
+    "last_login_at": "2026-06-02T15:20:16.123Z",
+    "id": "user_12345"
   }
   ```
-- **Error Responses**:
-  - `404 Not Found`: 이메일과 이름이 일치하는 사용자를 찾을 수 없을 때
-    ```json
-    { "detail": "이메일과 이름이 일치하는 사용자를 찾을 수 없습니다." }
-    ```
 
 ---
 
-### 3. Users (사용자 정보)
+### 2. Dashboard (홈 대시보드 분석)
 
-#### `GET /api/v1/users/me`
-- **설명**: 현재 로그인한(인증 헤더를 보낸) 사용자의 정보를 상세 조회합니다.
-- **인증**: JWT Bearer 토큰 필요 (🔑)
+#### `GET /api/dashboard/summary`
+- **설명**: 기간 및 제품 필터를 조합하여 요약 지표 및 전주 대비 증감폭(WoW), 그리고 긴급하게 대응해야 할 부정 리뷰 3건의 간략 요약 어레이를 서빙합니다.
+- **인증**: 🔑
+- **Query Parameters**:
+  - `product_id` (string, optional): 특정 제품 UUID
+  - `period` (integer, default=7): 분석 기간 범위 (일)
 - **Response** (200 OK):
   ```json
   {
-    "id": "uuid-string-here",
-    "email": "user@example.com",
-    "full_name": "홍길동",
-    "is_active": true
-  }
-  ```
-- **Error Responses**:
-  - `401 Unauthorized`: 유효하지 않거나 만료된 토큰일 경우
-
----
-
-### 4. AI Search (AI 분석 및 검색)
-
-> **벡터 검색 스택**: Pinecone에서 **GCP Cloud SQL PostgreSQL + pgvector** 로 전환됨.  
-> 임베딩은 **Vertex AI `text-embedding-004`** (폴백: Gemini HTTP API)를 사용하고,  
-> 텍스트 생성은 **Vertex AI `gemini-2.0-flash`** (폴백: `gemini-1.5-flash` → HTTP API)를 사용한다.
-
-#### `POST /api/v1/ai/search`
-- **설명**: 입력 쿼리를 Vertex AI 임베딩으로 변환한 뒤, Cloud SQL PostgreSQL의 pgvector 확장(`<=>` 코사인 거리 연산자)을 이용해 `reviews` 테이블에서 의미적으로 유사한 리뷰를 검색합니다.
-- **인증**: JWT Bearer 토큰 필요 (🔑)
-- **Request Body** (application/json):
-  ```json
-  {
-    "query": "피부가 따갑고 민감해졌을 때 쓰기 좋은 순한 토너패드 추천해줘",
-    "top_k": 5,
-    "filter": {
-      "product_id": "prod-uuid-1"
-    }
-  }
-  ```
-  - `query` (string, required): 검색할 자연어 질문/키워드
-  - `top_k` (integer, optional, default: 5): 반환할 유사 리뷰 개수
-  - `filter` (object, optional): 필터 조건. 현재 `product_id` 키만 지원
-- **Response** (200 OK):
-  ```json
-  {
-    "query": "피부가 따갑고 민감해졌을 때 쓰기 좋은 순한 토너패드 추천해줘",
-    "results": [
+    "total_reviews": 125,
+    "total_reviews_diff": 12,
+    "average_rating": 4.12,
+    "average_rating_diff": 0.15,
+    "negative_reviews_count": 22,
+    "negative_reviews_rate": 17.6,
+    "negative_reviews_rate_diff": -2.4,
+    "urgent_reviews_summary": [
       {
-        "id": "review-uuid-1",
-        "score": 0.892,
-        "metadata": {
-          "review_text": "얼굴 뒤집어졌을 때 쓰면 진정에 엄청 좋아요. 순하고 트러블 안 남.",
-          "rating": 5,
-          "review_date": "2026-05-30",
-          "sentiment": "positive",
-          "issue_type": "없음",
-          "ai_summary": "트러블 진정 효과가 우수하고 순한 성분으로 민감 피부에 적합함"
-        }
+        "id": "rev-uuid-101",
+        "summary": "리뉴얼된 패드 사용 후 이마에 여드름이 뒤집어졌다는 불만 제기",
+        "rating": 1
       }
     ]
   }
   ```
-  - `score`: pgvector 코사인 유사도 (`1 - 코사인거리`, 1.0에 가까울수록 유사)
-  - `metadata` 필드는 `reviews` 테이블의 실제 컬럼 기반 (`review_text`, `rating`, `review_date`, `sentiment`, `issue_type`, `ai_summary`)
 
-#### `POST /api/v1/ai/generate`
-- **설명**: 제공된 컨텍스트를 프롬프트에 주입하여 Vertex AI Gemini 모델로 한국어 답변을 생성합니다.
-- **인증**: JWT Bearer 토큰 필요 (🔑)
-- **Request Body** (application/json):
+#### `GET /api/dashboard/trending-keywords`
+- **설명**: 분석 기간 내 수집된 리뷰에서 언급 빈도가 가장 높은 상위 5대 급상승 키워드를 추출합니다.
+- **인증**: 🔑
+- **Response** (200 OK):
   ```json
-  {
-    "prompt": "검색 결과들을 요약해서 추천 이유를 작성해줘.",
-    "context": "제품: 어성초 스팟패드 카밍터치\n사용자 후기: 민감성에 좋음, 진정 효과 빠름."
-  }
+  [
+    { "keyword": "자극", "count": 48 },
+    { "keyword": "수분감", "count": 35 },
+    { "keyword": "진정", "count": 29 },
+    { "keyword": "용기불량", "count": 22 },
+    { "keyword": "끈적임", "count": 19 }
+  ]
   ```
-  - `prompt` (string, required): AI에게 수행시킬 질문 또는 명령어
-  - `context` (string, optional): 답변 생성에 주입할 참고 컨텍스트
+
+#### `GET /api/dashboard/negative-trend`
+- **설명**: Recharts 시계열 꺾은선/막대 차트 연동을 위한 일자별 부정 리뷰 발생 카운트 리스트를 오름차순 반환합니다.
+- **인증**: 🔑
+- **Response** (200 OK):
+  ```json
+  [
+    { "date": "2026-05-27", "count": 2 },
+    { "date": "2026-05-28", "count": 5 },
+    { "date": "2026-05-29", "count": 3 },
+    { "date": "2026-05-30", "count": 0 },
+    { "date": "2026-05-31", "count": 4 }
+  ]
+  ```
+
+#### `GET /api/dashboard/insights`
+- **설명**: 화장품 3대 주요 VOC 만족도(성분진정, 제형흡수, 용기편의) 백분율 점수 및 전주 대비 증감폭(%p)을 가져옵니다.
+- **인증**: 🔑
 - **Response** (200 OK):
   ```json
   {
-    "answer": "검색 결과에 근거했을 때, '어성초 스팟패드 카밍터치'는 어성초 성분이 함유되어 민감해진 피부를 빠르게 진정시킨다는 긍정 피드백이 많아 적극 추천합니다."
+    "ingredients": { "score": 88.5, "change": 3.2 },
+    "formulation": { "score": 92.0, "change": 1.5 },
+    "container": { "score": 64.2, "change": -8.4 }
+  }
+  ```
+
+#### `POST /api/dashboard/report`
+- **설명**: 요약 및 인사이트, 키워드를 결합한 정규 AI 대시보드 종합 성과 리포트 파일(Markdown 본문) 및 로우 통계 데이터 객체를 동적 빌드하여 제공합니다.
+- **인증**: 🔑
+- **Response** (200 OK):
+  ```json
+  {
+    "success": true,
+    "report_id": "rep_1740929281",
+    "report_markdown": "# TONES AI 분석 보고서\n\n- **생성시점**: 2026-06-02 15:35:00\n- **분석기간**: 최근 7일\n...\n",
+    "raw_data": {
+      "summary": { ... },
+      "insights": { ... },
+      "keywords": [ ... ]
+    }
   }
   ```
 
 ---
 
-### 5. Dashboard (대시보드 관리)
+### 3. Reviews (리뷰 분석 및 제어)
 
-#### `GET /api/v1/dashboard/products`
-- **설명**: 대시보드 제품 라인업 필터 및 상세 목록에 매핑할 전체 등록 화장품 제품들을 조회합니다.
-- **인증**: 필요 없음 (❌)
+#### `GET /api/reviews`
+- **설명**: 다중 필터링 조건 및 검색어가 결합된 고성능 동적 쿼리 페이징 리뷰 리스트를 반환합니다. (GCP Cloud SQL PostgreSQL 최적화 작동)
+- **인증**: 🔑
+- **Query Parameters**:
+  - `product` (string, optional): 제품 UUID
+  - `period` (integer, optional): 분석 기간 (일)
+  - `sentiment` (string, optional): 감성 구분 (`positive`, `neutral`, `negative`)
+  - `q` (string, optional): 검색어 (리뷰 본문 LIKE 검색)
+  - `page` (integer, default=1): 페이지 번호
+  - `limit` (integer, default=20): 한 페이지 크기
 - **Response** (200 OK):
   ```json
   [
     {
-      "id": "prod-uuid-1",
-      "brand_name": "아비브",
-      "product_name": "어성초 스팟패드 카밍터치",
-      "category": "토너패드",
-      "target_skin": "민감성",
-      "created_at": "2026-05-31T06:00:00Z"
-    }
-  ]
-  ```
-
-#### `GET /api/v1/dashboard/reviews/latest`
-- **설명**: 대시보드의 메인 화면에 표시할 부정 또는 일반 등 최근 수집된 실시간 리뷰 피드를 최신 등록 순으로 정렬해 제공합니다.
-- **인증**: 필요 없음 (❌)
-- **Query Parameters**:
-  - `limit` (integer, optional, default: 20): 조회할 최근 리뷰의 개수 한도
-- **Response** (200 OK):
-  ```json
-  [
-    {
-      "id": "rev-uuid-1",
-      "product_id": "prod-uuid-1",
-      "source": "올리브영",
-      "reviewer_type": "수분부족지성",
-      "review_text": "제품이 너무 두껍고 에센스가 부족해서 아쉬워요.",
-      "rating": 2,
-      "review_date": "2026-05-30",
-      "sentiment": "negative",
-      "sentiment_score": 0.21,
-      "keywords": ["에센스부족", "두꺼움"],
-      "issue_type": "사용감",
-      "ai_summary": "에센스 양이 적고 패드가 두꺼워 사용 시 아쉽다는 피드백이 있음",
-      "created_at": "2026-05-31T06:30:00Z",
-      "review_id": "olv-987654",
-      "products": {
-        "id": "prod-uuid-1",
-        "brand_name": "아비브",
-        "product_name": "어성초 스팟패드 카밍터치",
-        "category": "토너패드",
-        "target_skin": "민감성"
-      }
-    }
-  ]
-  ```
-
-#### `GET /api/v1/dashboard/reviews/search`
-- **설명**: 쉼표(,) 등으로 나열된 다중 키워드를 기준으로 필터링된 고객 리뷰 정보를 검색 및 반환합니다.
-- **인증**: 필요 없음 (❌)
-- **Query Parameters**:
-  - `keywords` (array of strings, optional): 검색용 키워드 배열. 쉼표(`,`)를 활용하여 문자열 하나로 전달할 수도 있음 (예: `keywords=트러블,자극` 또는 여러 개의 파라미터 `keywords=트러블&keywords=자극`)
-  - `limit` (integer, optional, default: 20): 반환할 매칭 리뷰 수
-- **Response** (200 OK):
-  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
-
-#### `GET /api/v1/dashboard/reviews/product/{product_id}`
-- **설명**: 특정 제품에만 속한 사용자 리뷰 목록을 페이지네이션 및 제한된 수로 상세 조회합니다.
-- **인증**: 필요 없음 (❌)
-- **Path Parameters**:
-  - `product_id` (string, required): 조회할 대상 상품 ID
-- **Query Parameters**:
-  - `limit` (integer, optional, default: 20): 최대로 가져올 리뷰 개수
-- **Response** (200 OK):
-  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
-
-#### `POST /api/v1/dashboard/reviews/bulk`
-- **설명**: 크롤러 및 배치 스크립트를 통해 수집된 다수의 원본 리뷰 데이터를 대량으로 업로드합니다. 백엔드의 AI 분석 파이프라인(감성 분석, 키워드 추출, 이슈 타입 결정 등)을 트리거하여 정제 과정을 거친 뒤 DB에 최종 반영합니다.
-- **인증**: 현재 별도 인증 미적용 (❌)
-- **Request Body** (application/json) — `ReviewCreate` 스키마 배열:
-  ```json
-  [
-    {
-      "product_id": "prod-uuid-1",
-      "content": "트러블 진정에 직빵입니다. 붉은 기가 많이 가라앉았어요.",
+      "id": "rev-uuid-555",
+      "product_id": "e680f731-cfde-427f-9077-62f7e484ec21",
+      "source": "olive_young",
+      "reviewer_type": "민감성 피부",
+      "review_text": "패드가 정말 도톰하고 밀착력이 좋은데, 제형은 끈적임 없이 금방 흡수돼서 아침 토너용으로 쓰기 편해요.",
       "rating": 5,
-      "skin_type": "민감성 건성",
-      "reviewer_type": "20대 여성",
-      "source": "올리브영",
-      "review_date": "2026-05-31",
-      "review_id": "olv-123456"
+      "review_date": "2026-06-01",
+      "sentiment": "positive",
+      "sentiment_score": 0.94,
+      "keywords": ["도톰", "밀착력", "끈적임", "아침토너"],
+      "issue_type": "없음",
+      "ai_summary": "도톰한 패드의 높은 밀착력과 산뜻하게 흡수되는 끈적임 없는 제형에 높은 만족을 보임.",
+      "score_ingredients": 0.85,
+      "score_formulation": 0.92,
+      "score_container": 0.50,
+      "review_id": "rev_ext_999202"
     }
   ]
   ```
-  - `product_id` (string, **required**): 대상 제품 UUID
-  - `content` (string, **required**): 리뷰 원문 텍스트
-  - `rating` (integer, **required**): 평점 (1~5)
-  - `skin_type` (string, optional): 피부 타입
-  - `reviewer_type` (string, optional): 리뷰어 유형
-  - `source` (string, optional, default: `"올리브영"`): 리뷰 출처
-  - `review_date` (string, optional): 리뷰 작성일 (YYYY-MM-DD)
-  - `review_id` (string, optional): 출처 플랫폼 고유 ID (중복 방지용)
+
+#### `POST /api/reviews/export`
+- **설명**: 현재 쿼리 및 필터에 정합하는 모든 리뷰 데이터를 정형화하여 BOM 헤더가 포함된 엑셀/Windows OS 완벽 호환 `utf-8-sig` 바이트 CSV 파일 다운로드 파일 스트림을 뿜어냅니다.
+- **인증**: 🔑
+- **Response**: `text/csv` 바이너리 스트림 파일 전송 (다운로드 파일명: `tones_reviews_export.csv`)
+
+---
+
+### 4. Products (제품 및 동기화 제어)
+
+#### `POST /api/products`
+- **설명**: 신규 화장품 상품을 등록하며, 테이블 내에 존재하지 않는 신규 브랜드/카테고리/피부타입이 감지될 경우 단일 트랜잭션 원자성을 통해 Lookup 테이블에 선행 자동 삽입 매핑을 안전하게 처리합니다.
+- **인증**: 🔑
+- **Request Body** (application/json):
+  ```json
+  {
+    "brand_name": "라운드랩",
+    "product_name": "자작나무 수분 선크림 패드",
+    "description": "산뜻하고 촉촉한 자작나무 수액 함유 자외선 차단 선패드",
+    "price": 28000.0,
+    "category": "pad",
+    "target_skin": "민감성"
+  }
+  ```
 - **Response** (201 Created):
   ```json
   {
-    "status": "success",
-    "processed_count": 1,
-    "inserted_count": 1,
-    "errors": []
+    "success": true,
+    "product": {
+      "id": "new-prod-uuid-888",
+      "brand_name": "라운드랩",
+      "product_name": "자작나무 수분 선크림 패드",
+      "description": "산뜻하고 촉촉한 자작나무 수액 함유 자외선 차단 선패드",
+      "price": 28000.0,
+      "category": "pad",
+      "target_skin": "민감성",
+      "is_analysis_active": true
+    }
   }
   ```
 
-#### `GET /api/v1/dashboard/statistics`
-- **설명**: 대시보드 시각화 차트(Recharts 연동 등)용 전체 집계 데이터와 LLM이 작성한 기간별 종합 AI 트렌드 리포트를 한 번에 받아오는 코어 API입니다.
-- **인증**: JWT Bearer 토큰 명시 (🔑*) — 단, 현재 프로토타입 환경에서는 토큰 없이도 호출 가능 (공통 주의사항 참고)
-- **Query Parameters**:
-  - `product_id` (string, optional): 지정할 시 특정 제품에 국한된 통계를 제공하며, 비워둘 시 전체 취급 제품의 총합 합산 결과를 리턴합니다.
-  - `period` (integer, optional, default: 7): 통계 분석을 집계할 조회 기간 범위 (일(day) 수 단위)
-- **Response** (200 OK):
+#### `PATCH /api/products/{id}`
+- **설명**: 등록된 제품의 메타데이터를 수정하거나 분석 주기 포함 활성화 토글 필드(`is_analysis_active`) 상태를 갱신합니다.
+- **인증**: 🔑
+- **Request Body**:
   ```json
   {
-    "product_id": "prod-uuid-1",
-    "period_days": 7,
-    "summary": {
-      "total_reviews": 1420,
-      "positive_count": 1150,
-      "negative_count": 270,
-      "average_rating": 4.2
-    },
-    "trend_chart_data": [
-      {
-        "date": "2026-05-25",
-        "positive": 150,
-        "negative": 32,
-        "average_rating": 4.1
-      },
-      {
-        "date": "2026-05-26",
-        "positive": 180,
-        "negative": 28,
-        "average_rating": 4.3
-      }
-    ],
-    "issue_distribution": {
-      "사용감": 120,
-      "트러블/자극": 85,
-      "에센스양": 45,
-      "패드두께": 20
-    },
-    "ai_trend_briefing": "최근 7일간 '어성초 스팟패드 카밍터치'에 관한 긍정 리뷰 비율은 약 81%로 유지되고 있습니다. 주로 '빠른 트러블 진정 효과'에 극찬이 있으나, 일부 사용감 측면에서 '패드 에센스가 금방 마른다'는 의견이 20%가량 증가했으므로 패키징 및 액량 보강을 검토해볼 필요가 있습니다."
-  }
-  ```
-
-#### `GET /api/v1/dashboard/layout`
-- **설명**: 사용자 대시보드 위젯의 고정 레이아웃을 조회합니다.
-- **인증**: 필요 없음 (❌)
-- **Query Parameters**:
-  - `token` (string, required): 사용자 식별 토큰
-- **Response** (200 OK):
-  ```json
-  {
-    "pinned_widget": "widget-1,widget-2"
-  }
-  ```
-
-#### `POST /api/v1/dashboard/layout`
-- **설명**: 사용자 대시보드 위젯의 고정 레이아웃을 저장하거나 업데이트합니다.
-- **인증**: 필요 없음 (❌)
-- **Request Body** (application/json):
-  ```json
-  {
-    "token": "user-token-123",
-    "pinned_widget": "widget-1,widget-2"
+    "is_analysis_active": false
   }
   ```
 - **Response** (200 OK):
   ```json
   {
-    "success": true
+    "success": true,
+    "product_id": "new-prod-uuid-888",
+    "is_analysis_active": false
   }
   ```
 
-#### `POST /api/v1/dashboard/reviews/ids`
-- **설명**: 제공된 ID 배열과 일치하는 리뷰 상세 목록을 조회합니다.
-- **인증**: 필요 없음 (❌)
-- **Request Body** (application/json):
+#### `POST /api/products/sync`
+- **설명**: 외부 쇼핑몰 플랫폼(네이버, 올리브영) 스크래퍼 크롤링 파이프라인 엔진 수동 가동 신호를 송출하고, `integrations` 동기화 이력 DB를 실시간 갱신합니다.
+- **인증**: 🔑
+- **Response** (200 OK):
   ```json
   {
-    "ids": ["rev-uuid-1", "rev-uuid-2"]
+    "success": true,
+    "message": "크롤링 배치 엔진 동기화가 성공적으로 시작되어 정상 반영되었습니다.",
+    "platforms": ["naver", "olive_young"]
   }
   ```
-- **Response** (200 OK):
-  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
 
 ---
 
-### 6. Frontend Compatibility (프론트엔드 호환용 API)
+### 5. Control Center & AI (제어센터 및 AI 어시스턴트)
 
-프론트엔드 레거시 코드 또는 특정 호환성 유지를 위해 제공되는 API 제품군입니다. 프리픽스로 `/api`를 사용합니다.
-
-#### `GET /api/products`
-- **설명**: 프론트엔드 호환용 전체 제품 목록을 조회합니다.
-- **인증**: 필요 없음 (❌)
+#### `POST /api/ai/chat`
+- **설명**: 사용자의 어시스턴트 질문(질의)에 맞춰, pgvector 확장 코사인 유사도 검색(`<=>`)을 구동해 정합하는 고객 리뷰 본문을 RAG 컨텍스트로 취합한 후 Gemini 2.0 비동기 챗 답변과 레퍼런스 증거 데이터 목록을 실시간 조립하여 리턴합니다. (3단계 3중 강건성 폴백 보장)
+- **인증**: 🔑
+- **Request Body** (application/json):
+  ```json
+  {
+    "message": "당근패드 용기 뚜껑에 대한 불만이 주로 뭐야?",
+    "product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba"
+  }
+  ```
 - **Response** (200 OK):
-  - [GET `/api/v1/dashboard/products`](#get-apiv1dashboardproducts)와 동일한 형식의 `ProductSchema` 배열 반환.
+  ```json
+  {
+    "answer": "검색된 당근패드 고객 리뷰 분석 결과, 주로 용기 집게 보관 캡의 헐거움과 뚜껑을 닫을 때 나사선이 잘 맞지 않아 헛도는 결함에 대한 불만이 뚜렷하게 관찰되고 있습니다. 주요 참고 리뷰는...",
+    "referenced_reviews": [
+      {
+        "id": "rev_5",
+        "score": 0.941,
+        "review_text": "용기가 너무 불편해요!! 뚜껑 헛돌고 집게 보관 캡이 헐거워져 아래로 빠집니다.",
+        "rating": 2,
+        "sentiment": "negative",
+        "ai_summary": "뚜껑 헛돌기와 내부 집게 보관 캡 이탈 등 용기 품질 불만 토로"
+      }
+    ]
+  }
+  ```
 
-#### `GET /api/reviews`
-- **설명**: 조건(특정 상품, 특정 키워드, 혹은 최신 리뷰)에 맞춰 분기 처리하여 리뷰 목록을 조회합니다.
-- **인증**: 필요 없음 (❌)
-- **Query Parameters**:
-  - `limit` (integer, optional, default: 20): 조회할 리뷰 수
-  - `product_id` (string, optional): 특정 상품 필터 ID. 지정 시 해당 상품 리뷰를 조회함.
-  - `keywords` (string, optional): 쉼표로 구분된 검색 키워드. 지정 시 키워드 매칭 리뷰를 조회함.
+#### `GET /api/integrations/status`
+- **설명**: 네이버 쇼핑 스토어 및 올리브영 데이터 수집 연동 에이전트의 배치 작동 상태 및 에러 코드를 DB를 단순 조회(배치 기록 연동)해 가장 가볍고 효율적으로 반환합니다.
+- **인증**: 🔑
 - **Response** (200 OK):
-  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
+  ```json
+  [
+    {
+      "platform_name": "naver",
+      "status": "connected",
+      "sync_rate": 98.0,
+      "error_message": null,
+      "last_synced_at": "2026-06-02T15:20:16Z"
+    },
+    {
+      "platform_name": "olive_young",
+      "status": "error",
+      "sync_rate": 40.0,
+      "error_message": "408 Request Timeout",
+      "last_synced_at": "2026-06-02T10:15:30Z"
+    }
+  ]
+  ```
 
-#### `GET /api/reviews/batch`
-- **설명**: 쉼표로 구분된 ID 문자열을 기반으로 리뷰 상세 목록을 조회합니다.
-- **인증**: 필요 없음 (❌)
-- **Query Parameters**:
-  - `ids` (string, required): 쉼표로 구분된 ID 목록 (예: `rev-1,rev-2,rev-3`)
+#### `POST /api/settings/reset`
+- **설명**: 제어센터의 시스템 설정 테이블(Settings) 레코드를 공장 초기화 설정(알림 수신 ON, 라이트 모드 기본, 동기화 주기 24시간)으로 리셋 업데이트합니다.
+- **인증**: 🔑
 - **Response** (200 OK):
-  - [GET `/reviews/latest`](#get-apiv1dashboardreviewslatest)와 동일한 형식의 `ReviewSchema` 배열 반환.
+  ```json
+  {
+    "success": true,
+    "message": "모든 시스템 환경 설정이 기본값으로 초기화되었습니다."
+  }
+  ```

@@ -1,115 +1,89 @@
-from typing import List, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from app.api import deps
-from app.schemas.dashboard import ProductSchema, ReviewSchema, ReviewCreate, LayoutSaveRequest, LayoutResponse, ReviewsByIdsRequest
 from app.services.dashboard_service import DashboardService
 from app.services.ai_service import AIService
 
 router = APIRouter()
 
-@router.get("/products", response_model=List[ProductSchema])
-def get_products(
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
-):
-    """
-    전체 제품 목록 조회 API (대시보드 패드 라인업용)
-    """
-    return dashboard_service.fetch_products()
 
-@router.get("/reviews/latest", response_model=List[ReviewSchema])
-def get_latest_reviews(
-    limit: int = Query(20, description="조회할 최신 리뷰 수"),
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
-):
-    """
-    최신 부정/일반 리뷰 목록 조회 API
-    """
-    return dashboard_service.fetch_latest_reviews(limit)
-
-@router.get("/reviews/search", response_model=List[ReviewSchema])
-def search_reviews_by_keywords(
-    keywords: List[str] = Query(None, alias="keywords", description="검색 키워드 목록"),
-    limit: int = Query(20, description="조회할 리뷰 수"),
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
-):
-    """
-    키워드 기반 리뷰 필터링/검색 API
-    """
-    final_keywords = []
-    if keywords:
-        for kw in keywords:
-            if "," in kw:
-                final_keywords.extend([k.strip() for k in kw.split(",") if k.strip()])
-            else:
-                final_keywords.append(kw.strip())
-                
-    return dashboard_service.fetch_reviews_by_keywords(final_keywords, limit)
-
-@router.get("/reviews/product/{product_id}", response_model=List[ReviewSchema])
-def get_reviews_by_product(
-    product_id: str,
-    limit: int = Query(20, description="조회할 리뷰 수"),
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
-):
-    """
-    특정 제품 리뷰 상세 목록 조회 API
-    """
-    return dashboard_service.fetch_reviews_by_product(product_id, limit)
-
-@router.post("/reviews/bulk", status_code=201)
-async def bulk_upload_reviews(
-    reviews: List[ReviewCreate],
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
-    ai_service: AIService = Depends(deps.get_ai_service)
-):
-    """
-    크롤링된 리뷰 대량 업로드 및 AI 파이프라인 처리 API (인증 미적용)
-    """
-    result = await dashboard_service.process_and_save_reviews(reviews, ai_service)
-    return result
-
-@router.get("/statistics")
-async def get_dashboard_statistics(
+@router.get("/summary")
+def get_dashboard_summary(
     product_id: Optional[str] = Query(None, description="특정 제품 필터 ID (미지정 시 전체 상품 합산)"),
     period: int = Query(7, description="조회할 기간 범위 (일 수, 기본 7일)"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    current_user: dict = Depends(deps.get_current_user)
+):
+    """
+    홈 대시보드 - 전체 리뷰, 평균 별점, 부정 리뷰 비율 및 WoW 변동량, 우선 확인 요약 반환 API (인증 필요)
+    """
+    return dashboard_service.fetch_dashboard_summary(product_id, period)
+
+
+@router.get("/trending-keywords")
+def get_trending_keywords(
+    product_id: Optional[str] = Query(None, description="특정 제품 필터 ID"),
+    period: int = Query(7, description="조회할 기간 범위"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    current_user: dict = Depends(deps.get_current_user)
+):
+    """
+    홈 대시보드 - Top 5 급상승 및 최다 언급 키워드 집계 API (인증 필요)
+    """
+    return dashboard_service.fetch_trending_keywords(product_id, period)
+
+
+@router.get("/negative-trend")
+def get_negative_trend(
+    product_id: Optional[str] = Query(None, description="특정 제품 필터 ID"),
+    period: int = Query(7, description="조회할 기간 범위"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    current_user: dict = Depends(deps.get_current_user)
+):
+    """
+    홈 대시보드 - 부정 리뷰 시계열 분포 집계 API (인증 필요)
+    """
+    return dashboard_service.fetch_negative_trend(product_id, period)
+
+
+@router.get("/insights")
+def get_insights(
+    product_id: Optional[str] = Query(None, description="특정 제품 필터 ID"),
+    period: int = Query(7, description="조회할 기간 범위"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    current_user: dict = Depends(deps.get_current_user)
+):
+    """
+    홈 대시보드 - 주요 분석 리스트 (성분/제형/용기 속성 점수 변동치 감지) API (인증 필요)
+    """
+    return dashboard_service.fetch_insights(product_id, period)
+
+
+@router.get("/ai-briefing")
+async def get_ai_briefing(
+    product_id: Optional[str] = Query(None, description="특정 제품 필터 ID"),
+    period: int = Query(7, description="조회할 기간 범위"),
     dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
     ai_service: AIService = Depends(deps.get_ai_service),
     current_user: dict = Depends(deps.get_current_user)
 ):
     """
-    대시보드 통계 서빙 및 캐싱 조회 API (Recharts 연동용 차트 데이터 및 AI 트렌드 브리핑 리턴) (인증 필요)
+    홈 대시보드 - AI 트렌드 및 핵심 긴급 시그널 브리핑 API (인증 필요)
     """
-    result = await dashboard_service.get_dashboard_statistics(product_id, period, ai_service)
-    return result
+    stats = await dashboard_service.get_dashboard_statistics(product_id, period, ai_service)
+    return {"ai_briefing": stats.get("ai_briefing", "")}
 
-@router.get("/layout", response_model=LayoutResponse)
-def get_user_layout(
-    token: str = Query(..., description="사용자 식별 토큰"),
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
+
+@router.post("/report")
+def create_report(
+    product_id: Optional[str] = Query(None, description="특정 제품 필터 ID"),
+    period: int = Query(7, description="조회할 기간 범위"),
+    report_type: str = Query("general", description="리포트 타입 (general 등)"),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    current_user: dict = Depends(deps.get_current_user)
 ):
     """
-    사용자 대시보드 위젯 고정 레이아웃 조회 API
+    홈 대시보드 - 정기 분석 및 성과 대시보드 요약 보고서 파일 생성 API (인증 필요)
     """
-    pinned = dashboard_service.load_layout(token)
-    return LayoutResponse(pinned_widget=pinned)
+    return dashboard_service.create_dashboard_report(product_id, period, report_type)
 
-@router.post("/layout")
-def save_user_layout(
-    payload: LayoutSaveRequest,
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
-):
-    """
-    사용자 대시보드 위젯 고정 레이아웃 저장/업데이트 API
-    """
-    success = dashboard_service.save_layout(payload.token, payload.pinned_widget)
-    return {"success": success}
-
-@router.post("/reviews/ids", response_model=List[ReviewSchema])
-def get_reviews_by_ids(
-    payload: ReviewsByIdsRequest,
-    dashboard_service: DashboardService = Depends(deps.get_dashboard_service)
-):
-    """
-    ID 배열을 기반으로 매칭되는 리뷰 상세 목록 조회 API
-    """
-    return dashboard_service.fetch_reviews_by_ids(payload.ids)

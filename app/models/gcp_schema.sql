@@ -33,6 +33,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'issue_type') THEN
         CREATE TYPE issue_type AS ENUM ('ingredients', 'formulation', 'container', 'scent', 'irritation', 'none', 'other');
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_type') THEN
+        CREATE TYPE role_type AS ENUM ('super_admin', 'analyst', 'manager');
+    END IF;
 END$$;
 
 -- 4. Users 테이블 생성
@@ -42,6 +45,8 @@ CREATE TABLE IF NOT EXISTS public.users (
     full_name VARCHAR(100) NOT NULL,
     hashed_password VARCHAR(255) NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
+    role role_type DEFAULT 'manager'::role_type,
+    last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -84,6 +89,7 @@ CREATE TABLE IF NOT EXISTS public.products (
     price NUMERIC,
     category_id INT NOT NULL REFERENCES public.categories(id) ON DELETE RESTRICT,
     skin_type_id INT NOT NULL REFERENCES public.skin_types(id) ON DELETE RESTRICT,
+    is_analysis_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -133,6 +139,33 @@ CREATE TABLE IF NOT EXISTS public.user_layouts (
 
 DROP TRIGGER IF EXISTS update_user_layouts_updated_at ON public.user_layouts;
 CREATE TRIGGER update_user_layouts_updated_at BEFORE UPDATE ON public.user_layouts
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- 11. Settings 테이블 생성
+CREATE TABLE IF NOT EXISTS public.settings (
+    id SERIAL PRIMARY KEY,
+    notification_enabled BOOLEAN DEFAULT TRUE,
+    dark_mode BOOLEAN DEFAULT FALSE,
+    analysis_interval_hours INT DEFAULT 24,
+    updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+DROP TRIGGER IF EXISTS update_settings_updated_at ON public.settings;
+CREATE TRIGGER update_settings_updated_at BEFORE UPDATE ON public.settings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- 12. Integrations 테이블 생성
+CREATE TABLE IF NOT EXISTS public.integrations (
+    id SERIAL PRIMARY KEY,
+    platform_name VARCHAR(100) UNIQUE NOT NULL,
+    status VARCHAR(50) DEFAULT 'connected',
+    sync_rate NUMERIC DEFAULT 100,
+    error_message TEXT,
+    last_synced_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+DROP TRIGGER IF EXISTS update_integrations_updated_at ON public.integrations;
+CREATE TRIGGER update_integrations_updated_at BEFORE UPDATE ON public.integrations
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 
@@ -207,3 +240,17 @@ ON CONFLICT (id) DO UPDATE SET
     category_id = EXCLUDED.category_id,
     skin_type_id = EXCLUDED.skin_type_id,
     updated_at = now();
+
+-- 3. Settings 및 Integrations 시드 데이터 로드
+INSERT INTO public.settings (id, notification_enabled, dark_mode, analysis_interval_hours)
+VALUES (1, TRUE, FALSE, 24)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.integrations (platform_name, status, sync_rate, error_message) VALUES
+('naver', 'connected', 98.0, NULL),
+('olive_young', 'error', 40.0, '408 Request Timeout')
+ON CONFLICT (platform_name) DO UPDATE SET
+    status = EXCLUDED.status,
+    sync_rate = EXCLUDED.sync_rate,
+    error_message = EXCLUDED.error_message,
+    last_synced_at = now();
