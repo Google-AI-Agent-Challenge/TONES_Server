@@ -5,11 +5,43 @@ from fastapi.security import OAuth2PasswordRequestForm
 from app.core.config import settings
 from app.core.security import create_access_token, verify_password
 from app.api import deps
-from app.schemas.auth import Token, FindEmailRequest, FindEmailResponse, FindPasswordRequest, FindPasswordResponse
+from app.schemas.auth import Token, UserLogin, FindEmailRequest, FindEmailResponse, FindPasswordRequest, FindPasswordResponse
 from app.schemas.user import User, UserCreate
 from app.services.user_service import UserService
 
 router = APIRouter()
+
+
+@router.post("/login", response_model=Token)
+def login(
+    payload: UserLogin,
+    user_service: UserService = Depends(deps.get_user_service)
+) -> Any:
+    """
+    JSON 기반 로그인 API (이메일 및 패스워드를 바디로 수신)
+    """
+    user = user_service.get_by_email(payload.email)
+    if not user or not verify_password(payload.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이메일 또는 비밀번호가 잘못되었습니다."
+        )
+    elif not user["is_active"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="비활성화된 사용자 계정입니다."
+        )
+    
+    # 최종 로그인 시간 업데이트
+    user_service.update_last_login(user["email"])
+    
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    return {
+        "access_token": create_access_token(
+            user["email"], expires_delta=access_token_expires
+        ),
+        "token_type": "bearer",
+    }
 
 
 @router.post("/login/access-token", response_model=Token)
@@ -18,7 +50,7 @@ def login_access_token(
     user_service: UserService = Depends(deps.get_user_service)
 ) -> Any:
     """
-    OAuth2 호환 액세스 토큰 획득 로그인 API
+    OAuth2 호환 액세스 토큰 획득 로그인 API (폼 데이터 기반)
     """
     user = user_service.get_by_email(form_data.username)
     if not user or not verify_password(form_data.password, user["hashed_password"]):
@@ -32,6 +64,9 @@ def login_access_token(
             detail="비활성화된 사용자 계정입니다."
         )
     
+    # 최종 로그인 시간 업데이트
+    user_service.update_last_login(user["email"])
+    
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
         "access_token": create_access_token(
@@ -39,6 +74,14 @@ def login_access_token(
         ),
         "token_type": "bearer",
     }
+
+
+@router.post("/logout")
+def logout() -> Any:
+    """
+    사용자 로그아웃 API (클라이언트 토큰 파기 처리용 단순 성공 반환)
+    """
+    return {"success": True, "message": "성공적으로 로그아웃되었습니다."}
 
 
 @router.post("/signup", response_model=User)

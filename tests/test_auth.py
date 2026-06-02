@@ -33,3 +33,23 @@ def test_login_access_token(client: TestClient):
     data = response.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+
+
+def test_json_login_and_logout(client: TestClient):
+    # JSON 기반 로그인 테스트
+    response = client.post(
+        f"{settings.API_V1_STR}/auth/login",
+        json={
+            "email": "test@example.com",
+            "password": "testpassword"
+        }
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    
+    # 로그아웃 테스트
+    logout_resp = client.post(f"{settings.API_V1_STR}/auth/logout")
+    assert logout_resp.status_code == 200
+    assert logout_resp.json()["success"] is True

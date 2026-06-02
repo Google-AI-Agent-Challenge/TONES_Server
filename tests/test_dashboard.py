@@ -126,21 +126,21 @@ def test_get_dashboard_statistics_caching():
     assert duration2 < 0.05
 
 
-def test_statistics_endpoint_without_auth(client: TestClient):
-    # 프로토타입 단계: 인증 비활성화로 인해 인증 없이 GET /api/v1/dashboard/statistics 호출 시 200 OK 반환 검증
+def test_statistics_endpoint_without_auth_fails_401(client: TestClient):
+    # 인증 없이 GET /api/dashboard/summary 호출 시 401 Unauthorized 보안 통과 실패 검증
     response = client.get(
-        f"{settings.API_V1_STR}/dashboard/statistics",
+        f"{settings.API_V1_STR}/dashboard/summary",
         params={"product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba", "period": 7}
     )
-    assert response.status_code == 200
+    assert response.status_code == 401
 
 
 def test_statistics_endpoint_serving(client: TestClient):
     # 1. 로그인하여 토큰 획득
     login_response = client.post(
-        f"{settings.API_V1_STR}/auth/login/access-token",
-        data={
-            "username": "test@example.com",
+        f"{settings.API_V1_STR}/auth/login",
+        json={
+            "email": "test@example.com",
             "password": "testpassword"
         }
     )
@@ -148,9 +148,9 @@ def test_statistics_endpoint_serving(client: TestClient):
     token = login_response.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    # 2. GET /api/v1/dashboard/statistics E2E API 서빙 검증 (인증 필드 탑재)
+    # 2. GET /api/dashboard/summary E2E API 서빙 검증 (인증 필드 탑재)
     response = client.get(
-        f"{settings.API_V1_STR}/dashboard/statistics",
+        f"{settings.API_V1_STR}/dashboard/summary",
         params={"product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba", "period": 7},
         headers=headers
     )
@@ -159,19 +159,62 @@ def test_statistics_endpoint_serving(client: TestClient):
     data = response.json()
     
     # JSON 통계 규격 확인
-    assert "product_id" in data
-    assert "period" in data
     assert "total_reviews" in data
     assert "average_rating" in data
-    assert "sentiment_breakdown" in data
-    assert "attribute_scores" in data
-    assert "ai_briefing" in data
-    
-    # 속성 점수 목록 확인
-    scores = data["attribute_scores"]
-    assert "ingredients" in scores
-    assert "formulation" in scores
-    assert "container" in scores
-    
-    # 브리핑 텍스트 존재 확인
-    assert len(data["ai_briefing"]) > 0
+    assert "negative_reviews_count" in data
+    assert "negative_reviews_rate" in data
+    assert "urgent_reviews_summary" in data
+
+    # 3. GET /api/dashboard/ai-briefing 검증
+    brief_resp = client.get(
+        f"{settings.API_V1_STR}/dashboard/ai-briefing",
+        params={"product_id": "04472697-d7c5-4cbe-bbc1-3cb62d3d4eba", "period": 7},
+        headers=headers
+    )
+    assert brief_resp.status_code == 200
+    assert "ai_briefing" in brief_resp.json()
+
+
+def test_products_management_and_admin_crud(client: TestClient):
+    # 1. 로그인
+    login_response = client.post(
+        f"{settings.API_V1_STR}/auth/login",
+        json={
+            "email": "test@example.com",
+            "password": "testpassword"
+        }
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. 제품 통계 조회
+    stats_resp = client.get(f"{settings.API_V1_STR}/products/stats", headers=headers)
+    assert stats_resp.status_code == 200
+    assert "registered_products_count" in stats_resp.json()
+
+    # 3. 신규 제품 추가
+    create_resp = client.post(
+        f"{settings.API_V1_STR}/products",
+        json={
+            "brand_name": "라운드랩",
+            "product_name": "신규 선크림 패드",
+            "description": "피부 진정 선패드",
+            "price": 25000.0,
+            "category": "pad",
+            "target_skin": "민감성"
+        },
+        headers=headers
+    )
+    assert create_resp.status_code == 201
+    assert create_resp.json()["success"] is True
+
+    # 4. 관리자 계정 목록 조회 (test@example.com이 super_admin 권한을 가져 통과 보장)
+    users_resp = client.get(f"{settings.API_V1_STR}/admin/users", headers=headers)
+    assert users_resp.status_code == 200
+    assert len(users_resp.json()) >= 1
+
+    # 5. 설정 초기화 테스트
+    reset_resp = client.post(f"{settings.API_V1_STR}/settings/reset", headers=headers)
+    assert reset_resp.status_code == 200
+    assert reset_resp.json()["success"] is True

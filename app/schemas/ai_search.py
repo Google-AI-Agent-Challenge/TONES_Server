@@ -26,3 +26,13 @@ class GenerateRequest(BaseModel):
 
 class GenerateResponse(BaseModel):
     answer: str
+
+
+class AIChatRequest(BaseModel):
+    message: str
+    product_id: str | None = None
+
+
+class AIChatResponse(BaseModel):
+    answer: str
+    referenced_reviews: List[Dict[str, Any]]

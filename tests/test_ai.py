@@ -82,8 +82,7 @@ def test_pgvector_semantic_search_sql():
     assert "product_id = %s" in called_sql
 
 
-@pytest.mark.asyncio
-async def test_cloud_sql_atomic_rollback_on_save_failure():
+def test_cloud_sql_atomic_rollback_on_save_failure():
     """
     GCP 통합 DB 아키텍처: 리뷰 및 임베딩 적재 중 RDBMS 오류 발생 시,
     동일 트랜잭션의 connection.rollback()이 작동하여 pgvector와 RDBMS 레코드가 원자적으로 동시 롤백되는지 검증
@@ -116,7 +115,8 @@ async def test_cloud_sql_atomic_rollback_on_save_failure():
         source="올리브영"
     )
 
-    res = await dashboard_service.process_and_save_reviews([review_in], ai_service)
+    import asyncio
+    res = asyncio.run(dashboard_service.process_and_save_reviews([review_in], ai_service))
     
     # 롤백이 성공적으로 1회 호출되어 데이터 원자성이 지켜졌는지 확인
     assert res["success_count"] == 0

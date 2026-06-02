@@ -29,12 +29,8 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-# 통합 API 라우터 포함
+# 통합 API 라우터 포함 (모든 API는 /api 접두사를 사용하며, 단일 라우터로 관리됨)
 app.include_router(api_router, prefix=settings.API_V1_STR)
-
-# 프론트엔드 호환용 API 라우터 포함
-from app.api.v1.endpoints import frontend_compat
-app.include_router(frontend_compat.router, prefix="/api", tags=["frontend-compat"])
 
 
 @app.get("/health", tags=["health"])
