@@ -390,32 +390,40 @@ class AIService:
         cont_diff = t_attr["container"] - l_attr["container"]
         rating_diff = this_week["average_rating"] - last_week["average_rating"]
         
+        system_instruction = (
+            "당신은 뷰티 이커머스 대시보드 전문 수석 분석가입니다. "
+            "주어진 화장품 제품의 이번 주 통계와 지난 주 통계를 바탕으로, "
+            "브랜드 매니저가 즉시 의사결정에 활용할 수 있는 심층 AI 브리핑 리포트를 한국어로 작성해 주세요.\n\n"
+            "작성 규칙:\n"
+            "1. 전체 분량은 750자 이상 1,000자 이하로 작성합니다.\n"
+            "2. 아래 4개 섹션을 순서대로 작성합니다. 각 섹션 제목은 그대로 사용하세요.\n"
+            "   - 긍정: 이번 주에 개선되거나 유지된 긍정적 흐름을 구체적 수치와 함께 2~3문장으로 서술합니다.\n"
+            "   - 이슈: 하락하거나 주의가 필요한 속성과 그 원인을 구체적 수치와 함께 2~3문장으로 서술합니다.\n"
+            "   - 트렌드 분석: 3대 속성(성분·제형·용기) 변동을 종합해 전반적인 고객 경험 흐름을 3~4문장으로 분석합니다.\n"
+            "   - 액션 아이템: 데이터를 근거로 브랜드 매니저가 취해야 할 구체적 조치 2~3가지를 간결하게 제안합니다.\n"
+            "3. 마크다운 기호(별표, 샵 등)는 사용하지 말고 순수 텍스트로만 작성합니다.\n"
+            "4. 서론 없이 첫 번째 섹션 제목부터 바로 시작합니다."
+        )
+
+        prompt = (
+            f"대상 제품명: {product_name}\n\n"
+            f"[이번 주 통계]\n"
+            f"- 총 리뷰 수: {this_week['total_reviews']}개\n"
+            f"- 평균 평점: {this_week['average_rating']}점 / 5.0\n"
+            f"- 긍정 리뷰 수: {this_week['sentiment_breakdown'].get('positive', 0)}개\n"
+            f"- 부정 리뷰 수: {this_week['sentiment_breakdown'].get('negative', 0)}개\n"
+            f"- 성분/고민 진정 만족도: {t_attr['ingredients']:.4f}\n"
+            f"- 제형/발림성 만족도: {t_attr['formulation']:.4f}\n"
+            f"- 용기/편의성 만족도: {t_attr['container']:.4f}\n\n"
+            f"[지난 주 대비 변동 폭 (WoW)]\n"
+            f"- 평점 변화: {rating_diff:+.2f}점\n"
+            f"- 성분/고민 변동: {ing_diff:+.4f} ({ing_diff*100:+.1f}%p)\n"
+            f"- 제형/발림성 변동: {form_diff:+.4f} ({form_diff*100:+.1f}%p)\n"
+            f"- 용기/편의성 변동: {cont_diff:+.4f} ({cont_diff*100:+.1f}%p)"
+        )
+
         # 1. GCP Vertex AI SDK 브리핑 생성 시도
         if _init_vertex_ai():
-            system_instruction = (
-                "당신은 뷰티 이커머스 대시보드 전문 수석 분석가입니다. 주어진 화장품 제품의 '이번 주' 통계 및 '지난 주' 통계 데이터를 기반으로,\n"
-                "고객 만족도 흐름을 분석하여 대시보드 최상단 배너에 노출될 **친절하고 정교한 한국어 1문장 실시간 요약 브리핑 (약 20~40단어)**을 생성해 주세요.\n\n"
-                "작성 규칙:\n"
-                "1. 수치 변동 폭(예: 성분/자극 만족도 상승 또는 용기 결함 불만 급증 등)을 반드시 강조해야 합니다.\n"
-                "2. 친근하지만 전문성 있는 어조를 사용하고, 반드시 한국어 1문장으로만 완성해 주세요. 마크다운 기호(별표 등)는 사용하지 마세요.\n"
-                "3. 절대 서론이나 설명 없이 브리핑 문장 하나만 바로 리턴하세요."
-            )
-            
-            prompt = (
-                f"대상 제품명: {product_name}\n\n"
-                f"[이번 주 통계]\n"
-                f"- 총 리뷰 수: {this_week['total_reviews']}개\n"
-                f"- 평균 평점: {this_week['average_rating']}점 / 5.0\n"
-                f"- 성분/고민 진정 만족도: {t_attr['ingredients']:.4f}\n"
-                f"- 제형/발림성 만족도: {t_attr['formulation']:.4f}\n"
-                f"- 용기/편의성 만족도: {t_attr['container']:.4f}\n\n"
-                f"[지난 주 대비 변동 폭 (WoW)]\n"
-                f"- 평점 변화: {rating_diff:+.2f}점\n"
-                f"- 성분/고민 변동: {ing_diff:+.4f}\n"
-                f"- 제형/발림성 변동: {form_diff:+.4f}\n"
-                f"- 용기/편의성 변동: {cont_diff:+.4f}"
-            )
-            
             models = ["gemini-2.0-flash", "gemini-1.5-flash"]
             for model_name in models:
                 try:
@@ -430,28 +438,6 @@ class AIService:
 
         # 2. HTTP API 기반 브리핑 생성 폴백
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
-            system_instruction = (
-                "당신은 뷰티 이커머스 대시보드 전문 수석 분석가입니다. 주어진 화장품 제품의 '이번 주' 통계 및 '지난 주' 통계 데이터를 기반으로,\n"
-                "고객 만족도 흐름을 분석하여 대시보드 최상단 배너에 노출될 **친절하고 정교한 한국어 1문장 실시간 요약 브리핑 (약 20~40단어)**을 생성해 주세요.\n\n"
-                "작성 규칙:\n"
-                "1. 수치 변동 폭(예: 성분/자극 만족도 상승 또는 용기 결함 불만 급증 등)을 반드시 강조해야 합니다.\n"
-                "2. 친근하지만 전문성 있는 어조를 사용하고, 반드시 한국어 1문장으로만 완성해 주세요. 마크다운 기호(별표 등)는 사용하지 마세요.\n"
-                "3. 절대 서론이나 설명 없이 브리핑 문장 하나만 바로 리턴하세요."
-            )
-            prompt = (
-                f"대상 제품명: {product_name}\n\n"
-                f"[이번 주 통계]\n"
-                f"- 총 리뷰 수: {this_week['total_reviews']}개\n"
-                f"- 평균 평점: {this_week['average_rating']}점 / 5.0\n"
-                f"- 성분/고민 진정 만족도: {t_attr['ingredients']:.4f}\n"
-                f"- 제형/발림성 만족도: {t_attr['formulation']:.4f}\n"
-                f"- 용기/편의성 만족도: {t_attr['container']:.4f}\n\n"
-                f"[지난 주 대비 변동 폭 (WoW)]\n"
-                f"- 평점 변화: {rating_diff:+.2f}점\n"
-                f"- 성분/고민 변동: {ing_diff:+.4f}\n"
-                f"- 제형/발림성 변동: {form_diff:+.4f}\n"
-                f"- 용기/편의성 변동: {cont_diff:+.4f}"
-            )
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.GEMINI_API_KEY}"
             payload = {
                 "contents": [{
@@ -459,7 +445,7 @@ class AIService:
                 }]
             }
             try:
-                with httpx.Client(timeout=15.0) as client:
+                with httpx.Client(timeout=20.0) as client:
                     response = client.post(url, json=payload)
                     if response.status_code == 200:
                         data = response.json()
@@ -474,35 +460,80 @@ class AIService:
         return self._local_trend_briefing_fallback(ing_diff, form_diff, cont_diff, rating_diff, product_name)
 
     def _local_trend_briefing_fallback(self, ing_diff: float, form_diff: float, cont_diff: float, rating_diff: float, product_name: str) -> str:
-        """로컬 트렌드 요약 (동일 유지)"""
-        issues = []
-        improvements = []
-        
-        if ing_diff <= -0.10:
-            issues.append(f"성분 및 피부 고민에 대한 부정 VOC가 {abs(ing_diff)*100:.1f}% 증가")
-        elif ing_diff >= 0.10:
-            improvements.append(f"성분 순함 및 진정 만족도 수치가 {ing_diff*100:.1f}% 개선")
-            
-        if form_diff <= -0.10:
-            issues.append(f"제형의 끈적임 및 화장 밀림에 대한 아쉬움 의견이 {abs(form_diff)*100:.1f}% 상승")
-        elif form_diff >= 0.10:
-            improvements.append(f"촉촉하고 산뜻한 발림성 만족도가 {form_diff*100:.1f}% 증가")
-            
-        if cont_diff <= -0.10:
-            issues.append(f"용기 불량, 뚜껑 헛돌기 및 집게 분실 불만이 {abs(cont_diff)*100:.1f}% 급증")
-        elif cont_diff >= 0.10:
-            improvements.append(f"용기 편의성 및 위생적 디자인 점수가 {cont_diff*100:.1f}% 상승")
+        """로컬 룰 기반 트렌드 브리핑 (4개 섹션 구조, 750자 이상 목표)"""
 
-        if issues:
-            detail_issue = ", ".join(issues)
-            return f"🚨 최근 1주일간 {product_name} 제품은 {detail_issue}하여 제품 개선 및 민감 피드백 조율이 요구됩니다."
-        elif improvements:
-            detail_impr = ", ".join(improvements)
-            return f"✨ 최근 1주일간 {product_name} 제품은 {detail_impr}하며 전반적으로 우수한 긍정 트렌드를 유지하고 있습니다."
+        # 각 속성별 방향 판단
+        def _direction(diff: float, pos_label: str, neg_label: str) -> tuple[str, str]:
+            if diff >= 0.05:
+                return "positive", pos_label
+            elif diff <= -0.05:
+                return "negative", neg_label
+            return "neutral", "변동 없음"
+
+        ing_dir, ing_label = _direction(
+            ing_diff,
+            f"성분 및 피부 진정 만족도가 전기 대비 {ing_diff*100:+.1f}%p 개선되었습니다.",
+            f"성분 및 자극 관련 불만이 전기 대비 {abs(ing_diff)*100:.1f}%p 증가하였습니다."
+        )
+        form_dir, form_label = _direction(
+            form_diff,
+            f"제형 발림성 및 흡수력 만족도가 {form_diff*100:+.1f}%p 상승하였습니다.",
+            f"끈적임·화장 밀림 관련 부정 피드백이 {abs(form_diff)*100:.1f}%p 증가하였습니다."
+        )
+        cont_dir, cont_label = _direction(
+            cont_diff,
+            f"용기 편의성 및 위생 만족도가 {cont_diff*100:+.1f}%p 향상되었습니다.",
+            f"용기 불량·뚜껑 헛돌기 등 불만이 {abs(cont_diff)*100:.1f}%p 급증하였습니다."
+        )
+
+        positives = [l for d, l in [(ing_dir, ing_label), (form_dir, form_label), (cont_dir, cont_label)] if d == "positive"]
+        negatives = [l for d, l in [(ing_dir, ing_label), (form_dir, form_label), (cont_dir, cont_label)] if d == "negative"]
+
+        if rating_diff > 0:
+            positives.append(f"평균 평점이 전기 대비 {rating_diff:+.2f}점 상승하며 전반적인 고객 만족도가 개선되는 추세입니다.")
+        elif rating_diff < 0:
+            negatives.append(f"평균 평점이 전기 대비 {rating_diff:+.2f}점 하락하여 추가적인 모니터링이 필요합니다.")
+
+        # 섹션 1: 긍정
+        if positives:
+            positive_text = " ".join(positives)
         else:
-            rating_comment = "안정적인 흐름"
-            if rating_diff > 0:
-                rating_comment = "미세한 평점 상승 추세"
-            elif rating_diff < 0:
-                rating_comment = "일시적인 미세 평점 하락"
-            return f"ℹ️ 최근 1주일간 {product_name} 제품의 통계 분석 결과, 평점이 {rating_comment}를 보이며 3대 핵심 속성 모두 균형 잡힌 만족도를 나타내고 있습니다."
+            positive_text = f"{product_name}의 3대 핵심 속성(성분·제형·용기) 만족도가 전기와 유사한 수준을 유지하고 있어 안정적인 품질 흐름이 관찰됩니다."
+
+        # 섹션 2: 이슈
+        if negatives:
+            issue_text = " ".join(negatives) + f" 해당 속성에 대한 고객 VOC를 면밀히 검토하고 즉각적인 대응 방안 마련이 권고됩니다."
+        else:
+            issue_text = f"이번 주 {product_name}에서 특별히 주의가 필요한 급격한 하락 지표는 감지되지 않았습니다. 다만 소폭 변동이 있는 속성에 대한 지속 모니터링을 권장합니다."
+
+        # 섹션 3: 트렌드 분석
+        dominant = max([(abs(ing_diff), "성분·피부 진정"), (abs(form_diff), "제형·발림성"), (abs(cont_diff), "용기·편의성")], key=lambda x: x[0])
+        trend_text = (
+            f"이번 주 {product_name}의 고객 반응을 종합하면, "
+            f"성분·피부 진정 속성은 {ing_diff*100:+.1f}%p, "
+            f"제형·발림성은 {form_diff*100:+.1f}%p, "
+            f"용기·편의성은 {cont_diff*100:+.1f}%p 변동을 기록하였습니다. "
+            f"이 중 '{dominant[1]}' 영역의 변동폭({dominant[0]*100:.1f}%p)이 가장 크게 나타나 고객 경험에 가장 큰 영향을 미친 것으로 분석됩니다. "
+            f"전반적인 리뷰 흐름은 {'긍정적인 방향으로 개선되고 있어 브랜드 신뢰도 제고에 기여하고 있습니다.' if len(positives) >= len(negatives) else '일부 속성에서 하락세가 감지되어 선제적 품질 관리가 필요한 시점입니다.'}"
+        )
+
+        # 섹션 4: 액션 아이템
+        actions = []
+        if ing_dir == "negative":
+            actions.append("성분 자극 관련 부정 리뷰를 집중 분류하여 특정 성분 또는 피부 타입과의 상관관계를 분석하고 제품 설명 페이지에 주의 안내를 보완하세요.")
+        if form_dir == "negative":
+            actions.append("끈적임·밀림 불만 리뷰를 유형별로 분류한 뒤, 계절 및 피부 타입에 따른 사용 가이드를 강화하거나 제형 개선 여부를 검토하세요.")
+        if cont_dir == "negative":
+            actions.append("용기 불량 관련 VOC를 제조사에 즉시 공유하고 QC 점검을 요청하세요. 고객 교환·환불 프로세스도 신속하게 안내하여 만족도 손실을 최소화하세요.")
+        if not actions:
+            actions.append("현재 안정적인 흐름을 유지하고 있으므로, 긍정 리뷰 기반의 마케팅 콘텐츠를 제작하여 브랜드 신뢰도를 적극적으로 활용하세요.")
+            actions.append("주간 데이터 모니터링을 지속하며, 미세 변동이 있는 속성에 대한 고객 패널 인터뷰를 병행해 선제적 품질 관리를 유지하세요.")
+
+        action_text = " ".join(actions)
+
+        return (
+            f"긍정\n{positive_text}\n\n"
+            f"이슈\n{issue_text}\n\n"
+            f"트렌드 분석\n{trend_text}\n\n"
+            f"액션 아이템\n{action_text}"
+        )

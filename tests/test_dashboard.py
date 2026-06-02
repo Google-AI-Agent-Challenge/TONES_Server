@@ -72,9 +72,11 @@ def test_local_trend_briefing_fallback():
         rating_diff=-0.4,
         product_name="독도 패드"
     )
-    assert "🚨" in brief_warn
-    assert "성분 및 피부 고민" in brief_warn
-    assert "부정 VOC" in brief_warn
+    # 새 구현: 4개 섹션 구조(긍정 / 이슈 / 트렌드 분석 / 액션 아이템) 검증
+    assert "이슈" in brief_warn
+    assert "성분 및 자극 관련 불만" in brief_warn
+    assert "트렌드 분석" in brief_warn
+    assert "액션 아이템" in brief_warn
 
     # 2. 수치 상승(만족도 상승) 시 긍정적 흐름 코멘트 확인
     brief_pos = ai_service._local_trend_briefing_fallback(
@@ -84,8 +86,10 @@ def test_local_trend_briefing_fallback():
         rating_diff=0.3,
         product_name="독도 패드"
     )
-    assert "✨" in brief_pos
-    assert "만족도 수치가 12.0% 개선" in brief_pos
+    assert "긍정" in brief_pos
+    assert "성분 및 피부 진정 만족도" in brief_pos
+    assert "트렌드 분석" in brief_pos
+    assert "액션 아이템" in brief_pos
 
     # 3. 큰 변동 없이 안정적인 경우 정보 브리핑 생성 확인
     brief_stable = ai_service._local_trend_briefing_fallback(
@@ -95,8 +99,9 @@ def test_local_trend_briefing_fallback():
         rating_diff=0.0,
         product_name="독도 패드"
     )
-    assert "ℹ️" in brief_stable
-    assert "안정적인 흐름" in brief_stable
+    assert "긍정" in brief_stable
+    assert "안정적인 품질 흐름" in brief_stable
+    assert "트렌드 분석" in brief_stable
 
 
 def test_get_dashboard_statistics_caching():
