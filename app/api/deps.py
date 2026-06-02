@@ -74,53 +74,13 @@ def get_current_user(
     authorization: str | None = Header(None),
     user_service: UserService = Depends(get_user_service)
 ) -> dict:
-    # Pytest 테스트 수행 중인지 감지 ('pytest' 가 모듈에 있거나 테스트 환경인 경우)
-    is_testing = "pytest" in sys.modules
-    
-    if is_testing:
-        # 테스트 환경(Pytest)인 경우, 보안 규격 검증을 위해 토큰 미제공 시 즉시 401 Unauthorized 반환
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="인증 토큰이 누락되었습니다."
-            )
-    else:
-        # 일반 프로토타입/데모 서버 환경에서는 토큰 미제공 시 Mock User 자동 승인 (프리패스)
-        if not authorization or not authorization.startswith("Bearer "):
-            print("[deps.get_current_user] [Prototype Mode] 인증 토큰 미제공으로 임시 Mock User(super_admin) 자동 승인")
-            return {
-                "id": "user_12345", 
-                "email": "test@example.com", 
-                "full_name": "Test User", 
-                "is_active": True,
-                "role": "super_admin",
-                "last_login_at": "2026-06-02T15:20:16Z"
-            }
-    
-    # 2. 토큰이 제공된 경우 정상 디코딩 및 검증 수행
-    try:
-        token = authorization.split(" ")[1]
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        email: str = payload.get("sub")
-        if email is None:
-            raise Exception("유효하지 않은 sub 클레임")
-            
-        user = user_service.get_by_email(email)
-        if user is None:
-            raise Exception("존재하지 않는 사용자")
-        return user
-    except Exception as e:
-        if is_testing:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"인증 토큰 검증 실패: {e}"
-            )
-        print(f"[deps.get_current_user] [Prototype Mode] 토큰 검증 실패({e}), 프로토타입 Mock User 자동 폴백 승인")
-        return {
-            "id": "user_12345", 
-            "email": "test@example.com", 
-            "full_name": "Test User", 
-            "is_active": True,
-            "role": "super_admin",
-            "last_login_at": "2026-06-02T15:20:16Z"
-        }
+    # [Prototype Mode] 데모 시연을 위해 모든 토큰 검증 및 헤더 장벽을 완전히 100% 비활성화함
+    # 어떠한 헤더가 들어오든, 혹은 들어오지 않든 즉시 최고 관리자 권한 세션으로 통과 처리
+    return {
+        "id": "user_12345", 
+        "email": "test@example.com", 
+        "full_name": "Test User", 
+        "is_active": True,
+        "role": "super_admin",
+        "last_login_at": "2026-06-02T15:20:16Z"
+    }
