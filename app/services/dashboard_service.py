@@ -1110,9 +1110,9 @@ class DashboardService:
 
         trend_dict = {}
         today = datetime.now().date()
-        
-        # 기본 날짜 범위 생성
-        for i in range(period_days):
+
+        # 기본 날짜 범위 생성 (today - period_days 포함, summary SQL 범위와 일치)
+        for i in range(period_days + 1):
             d_str = (today - timedelta(days=i)).isoformat()
             trend_dict[d_str] = 0
 
