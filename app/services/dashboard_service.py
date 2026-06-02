@@ -1153,9 +1153,59 @@ class DashboardService:
         dashboard_cache.set(cache_key, result)
         return result
 
+    # 카테고리별 대표 키워드 매핑 (키워드 → 카테고리 분류용)
+    _CATEGORY_KEYWORD_MAP = {
+        "ingredients": ["성분", "자극", "트러블", "진정", "피부결", "여드름", "붉", "순해", "순하", "민감", "피부 고민", "자극성", "피부진정", "저자극", "보습", "재구매", "산뜻", "피부결 만족"],
+        "formulation": ["제형", "흡수", "끈적", "발림", "촉촉", "수분", "밀림", "밀려", "발리", "보풀", "찢", "두께", "밀착", "에센스", "닦토", "부드러"],
+        "container": ["용기", "뚜껑", "집게", "패키지", "디자인", "포장", "캡", "불편", "편리"],
+    }
+
+    # 부정 신호 키워드 (해당 키워드가 포함되면 부정 방향으로 판단)
+    _NEGATIVE_SIGNAL_KWS = ["자극", "트러블", "여드름", "붉", "불편", "끈적", "밀림", "밀려", "보풀", "찢", "뚜껑 불편", "집게 불편", "따가", "뒤집"]
+
+    def _categorize_keyword(self, keyword: str) -> str:
+        for category, kws in self._CATEGORY_KEYWORD_MAP.items():
+            for kw in kws:
+                if kw in keyword:
+                    return category
+        return "unknown"
+
+    def _is_negative_keyword(self, keyword: str) -> bool:
+        return any(neg in keyword for neg in self._NEGATIVE_SIGNAL_KWS)
+
+    def _build_insight_text(self, category: str, related_keywords: list, change: float, score: float) -> str:
+        kw_str = ", ".join([f"'{k}'" for k in related_keywords]) if related_keywords else None
+        category_label = {"ingredients": "성분·피부 진정", "formulation": "제형·발림성", "container": "용기·편의성"}.get(category, category)
+
+        if not kw_str:
+            if change > 0:
+                return f"{category_label} 관련 만족도가 전기 대비 {change:+.1f}%p 개선되었습니다."
+            elif change < 0:
+                return f"{category_label} 관련 만족도가 전기 대비 {change:+.1f}%p 하락하였습니다."
+            else:
+                return f"{category_label} 관련 만족도는 전기와 동일한 수준을 유지하고 있습니다."
+
+        neg_kws = [k for k in related_keywords if self._is_negative_keyword(k)]
+        pos_kws = [k for k in related_keywords if not self._is_negative_keyword(k)]
+
+        if neg_kws and change < 0:
+            neg_str = ", ".join([f"'{k}'" for k in neg_kws])
+            return f"{neg_str} 키워드가 급상승하며 {category_label} 관련 불만 반응이 증가하고 있습니다. (만족도 {change:+.1f}%p)"
+        elif neg_kws and change >= 0:
+            neg_str = ", ".join([f"'{k}'" for k in neg_kws])
+            return f"{neg_str} 키워드 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. (만족도 {change:+.1f}%p)"
+        elif pos_kws and change > 0:
+            pos_str = ", ".join([f"'{k}'" for k in pos_kws])
+            return f"{pos_str} 키워드가 급상승하며 {category_label} 만족도가 개선 추세입니다. (만족도 {change:+.1f}%p)"
+        elif pos_kws and change < 0:
+            pos_str = ", ".join([f"'{k}'" for k in pos_kws])
+            return f"{pos_str} 언급이 있었으나 {category_label} 전반적 만족도는 하락하였습니다. 세부 리뷰 확인을 권장합니다. (만족도 {change:+.1f}%p)"
+        else:
+            return f"{kw_str} 키워드가 급상승하며 {category_label} 관련 이슈가 주목받고 있습니다. (만족도 {change:+.1f}%p)"
+
     def fetch_insights(self, product_id: Optional[str], period_days: int) -> dict:
         """
-        주요 분석 리스트 (성분/제형/용기 속성 점수 변동치 감지)
+        주요 분석 리스트 (성분/제형/용기 속성 점수 변동치 감지 + 급상승 키워드 연계 인사이트)
         """
         cache_key = ("insights", product_id, period_days)
         hit, cached = dashboard_cache.get(cache_key, _TTL_INSIGHTS)
@@ -1208,19 +1258,34 @@ class DashboardService:
         t_attr = this_agg["attribute_scores"]
         l_attr = last_agg["attribute_scores"]
 
-        result = {
-            "ingredients": {
-                "score": round(t_attr["ingredients"] * 100, 1),
-                "change": round((t_attr["ingredients"] - l_attr["ingredients"]) * 100, 1)
-            },
-            "formulation": {
-                "score": round(t_attr["formulation"] * 100, 1),
-                "change": round((t_attr["formulation"] - l_attr["formulation"]) * 100, 1)
-            },
-            "container": {
-                "score": round(t_attr["container"] * 100, 1),
-                "change": round((t_attr["container"] - l_attr["container"]) * 100, 1)
+        # 급상승 키워드 조회 후 카테고리별 분류
+        trending = self.fetch_trending_keywords(product_id, period_days)
+        category_keywords: dict = {"ingredients": [], "formulation": [], "container": []}
+        for item in trending:
+            cat = self._categorize_keyword(item["keyword"])
+            if cat in category_keywords:
+                category_keywords[cat].append(item["keyword"])
+
+        def _build_entry(category: str, this_score: float, last_score: float) -> dict:
+            score = round(this_score * 100, 1)
+            change = round((this_score - last_score) * 100, 1)
+            related = category_keywords.get(category, [])
+
+            # sentiment 결정: 변동치 방향 + 관련 키워드 부정 신호 조합
+            sentiment = "negative" if change < 0 else "positive"
+
+            return {
+                "score": score,
+                "change": change,
+                "sentiment": sentiment,
+                "related_keywords": related,
+                "insight_text": self._build_insight_text(category, related, change, score),
             }
+
+        result = {
+            "ingredients": _build_entry("ingredients", t_attr["ingredients"], l_attr["ingredients"]),
+            "formulation": _build_entry("formulation", t_attr["formulation"], l_attr["formulation"]),
+            "container": _build_entry("container", t_attr["container"], l_attr["container"]),
         }
         dashboard_cache.set(cache_key, result)
         return result
