@@ -390,6 +390,10 @@ class AIService:
         cont_diff = t_attr["container"] - l_attr["container"]
         rating_diff = this_week["average_rating"] - last_week["average_rating"]
         
+        is_stable = (round(abs(ing_diff) * 100, 1) == 0.0 and 
+                     round(abs(form_diff) * 100, 1) == 0.0 and 
+                     round(abs(cont_diff) * 100, 1) == 0.0)
+
         system_instruction = (
             "당신은 뷰티 이커머스 대시보드 전문 수석 분석가입니다. "
             "주어진 화장품 제품의 이번 주 통계와 지난 주 통계를 바탕으로, "
@@ -404,6 +408,15 @@ class AIService:
             "3. 마크다운 기호(별표, 샵 등)는 사용하지 말고 순수 텍스트로만 작성합니다.\n"
             "4. 서론 없이 첫 번째 섹션 제목부터 바로 시작합니다."
         )
+
+        if is_stable:
+            system_instruction += (
+                "\n\n[특별 지시사항]\n"
+                "현재 성분, 제형, 용기의 3대 속성 변동폭이 모두 0.0%p 근처로 매우 미미합니다. "
+                "억지로 가장 큰 변동폭을 찾아 해석하려고 하지 마십시오. "
+                "대신 '품질 이슈 없이 견고하고 안정적인 만족도를 유지하고 있습니다'라는 문구를 반드시 포함하여 "
+                "제품의 품질 균일성과 만족도의 높은 안정성을 강조하는 문맥으로 트렌드 분석과 액션 아이템을 작성해 주세요."
+            )
 
         def _fmt_wow(diff: float) -> str:
             """WoW 변동값을 문자열로 변환. 0이면 수치 대신 '변동 없음' 반환."""
@@ -473,6 +486,39 @@ class AIService:
 
     def _local_trend_briefing_fallback(self, ing_diff: float, form_diff: float, cont_diff: float, rating_diff: float, product_name: str) -> str:
         """로컬 룰 기반 트렌드 브리핑 (4개 섹션 구조, 750자 이상 목표)"""
+        
+        is_stable = (round(abs(ing_diff) * 100, 1) == 0.0 and 
+                     round(abs(form_diff) * 100, 1) == 0.0 and 
+                     round(abs(cont_diff) * 100, 1) == 0.0)
+
+        if is_stable:
+            positive_text = (
+                f"이번 주 {product_name}의 3대 핵심 속성(성분·제형·용기) 모두 만족도가 매우 안정적으로 유지되고 있습니다. "
+                "고객들로부터 특별히 부정적인 피드백이나 우려할 만한 이탈 신호가 발견되지 않았으며, "
+                "일관된 사용 경험을 기반으로 긍정적인 브랜드 평판이 견고하게 다져지고 있습니다."
+            )
+            issue_text = (
+                f"이번 주 분석 기간 동안 {product_name} 제품에 대한 유의미한 불만 증가나 품질 저하 이슈는 감지되지 않았습니다. "
+                "전 영역에 걸쳐 만족도가 균일하게 보존되고 있으며, "
+                "리뷰 건수나 성향 측면에서도 우려할 만한 이상 징후는 나타나지 않았습니다."
+            )
+            trend_text = (
+                f"이번 주 {product_name}의 고객 만족도 추이를 종합적으로 분석한 결과, "
+                "성분 및 피부 진정, 제형 및 발림성, 용기 편의성 등 모든 주요 속성의 변동폭이 0.0%p 내외에 머무르고 있습니다. "
+                f"이와 같이 제품은 품질 이슈 없이 견고하고 안정적인 만족도를 유지하고 있습니다. "
+                "소비자들이 제품의 균일한 품질 완성도에 전반적으로 크게 신뢰하고 있는 것으로 파악됩니다."
+            )
+            action_text = (
+                "현재 구축된 균일하고 우수한 품질 안정성을 브랜드 공식 홈페이지 및 판매 채널의 핵심 마케팅 소구점으로 활용할 것을 제안합니다. "
+                "특별한 트러블이나 제형 관련 클레임이 발생하지 않는 현 상태를 증명하는 긍정 리뷰 중심의 사용자 경험을 콘텐츠화하여 신규 고객 유치에 활용하십시오. "
+                "아울러 현재의 높은 만족도를 유지하기 위해 정기적인 품질 보증 모니터링을 지속적으로 수행하십시오."
+            )
+            return (
+                f"📈 긍정\n{positive_text}\n\n"
+                f"⚠️ 이슈\n{issue_text}\n\n"
+                f"📊 트렌드 분석\n{trend_text}\n\n"
+                f"🎯 액션 아이템\n{action_text}"
+            )
 
         # 각 속성별 방향 판단
         def _direction(diff: float, pos_label: str, neg_label: str) -> tuple[str, str]:

@@ -204,6 +204,14 @@ class DocsService:
                 headers=headers,
                 json={"title": title},
             )
+            if create_resp.status_code == 403:
+                raise RuntimeError(
+                    "Google Docs API 권한 오류 (HTTP 403).\n"
+                    "GCP 콘솔에서 아래 두 API가 활성화되어 있는지 확인하세요:\n"
+                    "  1) Google Docs API (docs.googleapis.com)\n"
+                    "  2) Google Drive API (drive.googleapis.com)\n"
+                    f"응답: {create_resp.text}"
+                )
             if create_resp.status_code != 200:
                 raise RuntimeError(
                     f"Google Docs 문서 생성 실패 (HTTP {create_resp.status_code}): "
