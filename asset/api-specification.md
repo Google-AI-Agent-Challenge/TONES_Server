@@ -3,7 +3,7 @@
 이 문서는 **TONES** B2B AI 리뷰 분석 대시보드 백엔드 서비스(`TONES_Server`)의 공식 API 명세서입니다. 
 본 백엔드 시스템은 FastAPI 비동기 프레임워크와 GCP Cloud SQL pgvector 확장 및 Vertex AI(Gemini 2.0) 생태계를 기반으로 구축되었습니다.
 
-> **마지막 업데이트**: 2026-06-02 (`GET /api/reviews/count` 신규 추가 — 프론트엔드 병렬 청크 로딩 지원)
+> **마지막 업데이트**: 2026-06-04 (Domain 기반 MVC + Repository 아키텍처 전환 — API 경로 및 스펙 변경 없음)
 
 ---
 
@@ -29,56 +29,56 @@
 ### 1. 헬스체크 및 계정/인증 (Health & Auth)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
 | :--- | :--- | :--- | :---: | :--- |
-| **Health** | `GET` | `/health` | ❌ | 백엔드 서버 상태 확인 (Health Check) |
-| **Auth** | `POST` | `/api/auth/login` | ❌ | JSON 기반 일반 사용자 로그인 및 JWT 발급 |
-| | `POST` | `/api/auth/login/access-token` | ❌ | OAuth2 표준 Form 기반 로그인 및 토큰 발급 |
-| | `POST` | `/api/auth/logout` | ❌ | 사용자 세션 파기 및 로그아웃 |
-| | `POST` | `/api/auth/signup` | ❌ | B2B 플랫폼 신규 사용자 회원가입 |
-| | `POST` | `/api/auth/find-email` | ❌ | 이름 기반 가입 이메일(아이디) 찾기 |
-| | `POST` | `/api/auth/find-password` | ❌ | 이메일 및 이름 기반 임시 비밀번호 재설정 |
-| **Users** | `GET` | `/api/users/me` | 🔑 | 현재 로그인한 사용자의 권한 및 상태 상세 프로필 조회 |
+| **Health** | `GET` | [/health](#get-health) | ❌ | 백엔드 서버 상태 확인 (Health Check) |
+| **Auth** | `POST` | [/api/auth/login](#post-apiauthlogin) | ❌ | JSON 기반 일반 사용자 로그인 및 JWT 발급 |
+| | `POST` | [/api/auth/login/access-token](#post-apiauthloginaccess-token) | ❌ | OAuth2 표준 Form 기반 로그인 및 토큰 발급 |
+| | `POST` | [/api/auth/logout](#post-apiauthlogout) | ❌ | 사용자 세션 파기 및 로그아웃 |
+| | `POST` | [/api/auth/signup](#post-apiauthsignup) | ❌ | B2B 플랫폼 신규 사용자 회원가입 |
+| | `POST` | [/api/auth/find-email](#post-apiauthfind-email) | ❌ | 이름 기반 가입 이메일(아이디) 찾기 |
+| | `POST` | [/api/auth/find-password](#post-apiauthfind-password) | ❌ | 이메일 및 이름 기반 임시 비밀번호 재설정 |
+| **Users** | `GET` | [/api/users/me](#get-apiusersme) | 🔑 | 현재 로그인한 사용자의 권한 및 상태 상세 프로필 조회 |
 
 ### 2. 홈 대시보드 (homePage)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
 | :--- | :--- | :--- | :---: | :--- |
-| **Dashboard** | `GET` | `/api/dashboard/summary` | 🔑 | 만족도 평균, 전체 리뷰 수, 우선 확인 요약 (WoW 전주 대비 포함) |
-| | `GET` | `/api/dashboard/trending-keywords` | 🔑 | 기간 내 언급 빈도 최다 Top 5 키워드 목록 조회 |
-| | `GET` | `/api/dashboard/negative-trend` | 🔑 | Recharts 차트 연동용 부정 리뷰 일자별 시계열 발생 추이 |
-| | `GET` | `/api/dashboard/insights` | 🔑 | 3대 화장품 품질 만족도(성분/제형/용기) WoW 변동율 |
-| | `GET` | `/api/dashboard/ai-briefing` | 🔑 | Gemini 2.0-flash 기반의 대시보드 실시간 AI 트렌드 보고 브리핑 |
-| | `POST` | `/api/dashboard/report` | 🔑 | AI 분석 요약 보고서(Markdown) 및 엑셀 로우 데이터 패키지 생성 |
-| | `POST` | `/api/dashboard/export/docs` | 🔑 | AI 분석 Markdown 기반 문서 내용 및 리포트 데이터 반환 (Google Docs 미사용) |
+| **Dashboard** | `GET` | [/api/dashboard/summary](#get-apidashboardsummary) | 🔑 | 만족도 평균, 전체 리뷰 수, 우선 확인 요약 (WoW 전주 대비 포함) |
+| | `GET` | [/api/dashboard/trending-keywords](#get-apidashboardtrending-keywords) | 🔑 | 기간 내 언급 빈도 최다 Top 5 키워드 목록 조회 |
+| | `GET` | [/api/dashboard/negative-trend](#get-apidashboardnegative-trend) | 🔑 | Recharts 차트 연동용 부정 리뷰 일자별 시계열 발생 추이 |
+| | `GET` | [/api/dashboard/insights](#get-apidashboardinsights) | 🔑 | 3대 화장품 품질 만족도(성분/제형/용기) WoW 변동율 |
+| | `GET` | [/api/dashboard/ai-briefing](#get-apidashboardai-briefing) | 🔑 | Gemini 2.0-flash 기반의 대시보드 실시간 AI 트렌드 보고 브리핑 |
+| | `POST` | [/api/dashboard/report](#post-apidashboardreport) | 🔑 | AI 분석 요약 보고서(Markdown) 및 엑셀 로우 데이터 패키지 생성 |
+| | `POST` | [/api/dashboard/export/docs](#post-apidashboardexportdocs) | 🔑 | AI 분석 Markdown 기반 문서 내용 및 리포트 데이터 반환 (Google Docs 미사용) |
 
 ### 3. 리뷰 및 제품 분석 (리뷰분석 / 제품관리)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
 | :--- | :--- | :--- | :---: | :--- |
-| **Reviews** | `GET` | `/api/reviews/count` | 🔑 | 필터 조건별 리뷰 총 건수 조회 (병렬 청크 로딩용) |
-| | `GET` | `/api/reviews` | 🔑 | 통합 검색 및 다중 조건 필터링 페이징 리뷰 목록 조회 |
-| | `GET` | `/api/reviews/attribute-scores` | 🔑 | 스킨케어 3대 품질 속성 점수 종합 기간 평균 수치 산출 |
-| | `POST` | `/api/reviews/export` | 🔑 | 현재 필터링된 모든 리뷰를 BOM-UTF8 프리미엄 CSV 스트림 전송 |
-| | `POST` | `/api/reviews/bulk` | ❌ | 크롤링 원시 데이터 대량 업로드 및 AI ABSA 파이프라인 적재 |
-| **Products** | `GET` | `/api/products/stats` | 🔑 | 등록 제품 수, 분석 활성 제품 수, 누적 리뷰 집계 조회 |
-| | `GET` | `/api/products` | 🔑 | 정렬, 검색 및 페이징이 가미된 전체 상품 관리 목록 조회 |
-| | `GET` | `/api/products/list` | ❌ | 프론트엔드 필터용 전체 단순 제품 드롭다운 리스트 반환 |
-| | `POST` | `/api/products` | 🔑 | 신규 화장품 제품 등록 (브랜드, 피부타입 등 관계 자동 등록) |
-| | `PATCH` | `/api/products/{id}` | 🔑 | 분석 활성화 토글(`is_analysis_active`) 및 제품 정보 부분 갱신 |
-| | `POST` | `/api/products/sync` | 🔑 | 크롤러 엔진 수동 배치 동기화 시작 및 이력 상태 기록 |
+| **Reviews** | `GET` | [/api/reviews/count](#get-apireviewscount) | 🔑 | 필터 조건별 리뷰 총 건수 조회 (병렬 청크 로딩용) |
+| | `GET` | [/api/reviews](#get-apireviews) | 🔑 | 통합 검색 및 다중 조건 필터링 페이징 리뷰 목록 조회 |
+| | `GET` | [/api/reviews/attribute-scores](#get-apireviewsattribute-scores) | 🔑 | 스킨케어 3대 품질 속성 점수 종합 기간 평균 수치 산출 |
+| | `POST` | [/api/reviews/export](#post-apireviewsexport) | 🔑 | 현재 필터링된 모든 리뷰를 BOM-UTF8 프리미엄 CSV 스트림 전송 |
+| | `POST` | [/api/reviews/bulk](#post-apireviewsbulk) | ❌ | 크롤링 원시 데이터 대량 업로드 및 AI ABSA 파이프라인 적재 |
+| **Products** | `GET` | [/api/products/stats](#get-apiproductsstats) | 🔑 | 등록 제품 수, 분석 활성 제품 수, 누적 리뷰 집계 조회 |
+| | `GET` | [/api/products](#get-apiproducts) | 🔑 | 정렬, 검색 및 페이징이 가미된 전체 상품 관리 목록 조회 |
+| | `GET` | [/api/products/list](#get-apiproductslist) | ❌ | 프론트엔드 필터용 전체 단순 제품 드롭다운 리스트 반환 |
+| | `POST` | [/api/products](#post-apiproducts) | 🔑 | 신규 화장품 제품 등록 (브랜드, 피부타입 등 관계 자동 등록) |
+| | `PATCH` | [/api/products/{id}](#patch-apiproductsid) | 🔑 | 분석 활성화 토글(`is_analysis_active`) 및 제품 정보 부분 갱신 |
+| | `POST` | [/api/products/sync](#post-apiproductssync) | 🔑 | 크롤러 엔진 수동 배치 동기화 시작 및 이력 상태 기록 |
 
 ### 4. AI 어시스턴트 및 제어센터 (Layout & Control Center)
 | 태그 | 메서드 | 엔드포인트 | 인증 | 설명 |
 | :--- | :--- | :--- | :---: | :--- |
-| **Layout** | `GET` | `/api/layout` | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 조회 |
-| | `PUT` | `/api/layout` | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 영속 저장/수정 |
-| **AI Assistant**| `POST` | `/api/ai/chat` | 🔑 | pgvector 시맨틱 컨텍스트 매칭 결합 RAG 챗봇 어시스턴트 대화 |
-| | `GET` | `/api/ai/insight-briefing`| 🔑 | 리뷰 분석용 실시간 AI 핵심 VOC 요약 브리핑 및 현황 조회 |
-| **Admin** | `GET` | `/api/admin/users` | 🔑(S) | 제어센터 - 전체 관리자 계정 목록 조회 (슈퍼 관리자 권한 필수) |
-| | `POST` | `/api/admin/users` | 🔑(S) | 제어센터 - B2B 신규 관리자 계정 생성 (슈퍼 관리자 권한 필수) |
-| | `PATCH` | `/api/admin/users/{id}` | 🔑(S) | 제어센터 - 관리자 권한/상태/비밀번호 부분 수정 (슈퍼 관리자 권한) |
-| | `DELETE`| `/api/admin/users/{id}` | 🔑(S) | 제어센터 - 관리자 계정 영구 삭제 (슈퍼 관리자 권한 필수) |
-| **Settings** | `GET` | `/api/settings` | 🔑 | 제어센터 - 알림 및 시스템 환경 설정값 조회 |
-| | `PUT` | `/api/settings` | 🔑 | 제어센터 - 알림 및 시스템 환경 설정값 수정/저장 |
-| | `POST` | `/api/settings/reset` | 🔑 | 제어센터 - 알림 및 환경 설정을 팩토리 초기화 상태로 복원 |
-| **Integrations**| `GET` | `/api/integrations/status`| 🔑 | 제어센터 - 네이버·올리브영 연동 플랫폼 이력 및 상태 정보 조회 |
+| **Layout** | `GET` | [/api/layout](#get-apilayout) | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 조회 |
+| | `PUT` | [/api/layout](#put-apilayout--post-apilayout) | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 영속 저장/수정 |
+| **AI Assistant**| `POST` | [/api/ai/chat](#post-apiaichat) | 🔑 | pgvector 시맨틱 컨텍스트 매칭 결합 RAG 챗봇 어시스턴트 대화 |
+| | `GET` | [/api/ai/insight-briefing](#get-apiaiinsight-briefing) | 🔑 | 리뷰 분석용 실시간 AI 핵심 VOC 요약 브리핑 및 현황 조회 |
+| **Admin** | `GET` | [/api/admin/users](#get-apiadminusers) | 🔑(S) | 제어센터 - 전체 관리자 계정 목록 조회 (슈퍼 관리자 권한 필수) |
+| | `POST` | [/api/admin/users](#post-apiadminusers) | 🔑(S) | 제어센터 - B2B 신규 관리자 계정 생성 (슈퍼 관리자 권한 필수) |
+| | `PATCH` | [/api/admin/users/{id}](#patch-apiadminusersid) | 🔑(S) | 제어센터 - 관리자 권한/상태/비밀번호 부분 수정 (슈퍼 관리자 권한) |
+| | `DELETE`| [/api/admin/users/{id}](#delete-apiadminusersid) | 🔑(S) | 제어센터 - 관리자 계정 영구 삭제 (슈퍼 관리자 권한 필수) |
+| **Settings** | `GET` | [/api/settings](#get-apisettings) | 🔑 | 제어센터 - 알림 및 시스템 환경 설정값 조회 |
+| | `PUT` | [/api/settings](#put-apisettings) | 🔑 | 제어센터 - 알림 및 시스템 환경 설정값 수정/저장 |
+| | `POST` | [/api/settings/reset](#post-apisettingsreset) | 🔑 | 제어센터 - 알림 및 환경 설정을 팩토리 초기화 상태로 복원 |
+| **Integrations**| `GET` | [/api/integrations/status](#get-apiintegrationsstatus) | 🔑 | 제어센터 - 네이버·올리브영 연동 플랫폼 이력 및 상태 정보 조회 |
 
 * 🔑 : JWT Bearer 인증 필수  
 * 🔑(S) : JWT Bearer 인증 필수 및 `super_admin` 권한 검증 미들웨어 필요  
