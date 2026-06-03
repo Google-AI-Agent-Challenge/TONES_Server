@@ -1363,6 +1363,13 @@ class DashboardService:
         insights = self.fetch_insights(product_id, period_days)
         keywords = self.fetch_trending_keywords(product_id, period_days)
 
+        def _fmt_report_insight(item: dict) -> str:
+            score_val = item['score']
+            change_val = item['change']
+            if round(abs(change_val), 1) == 0.0:
+                return "품질 이슈 없이 견고하고 안정적인 만족도를 유지하고 있습니다."
+            return f"{score_val:.1f}% (전기 대비 {change_val:+.1f}%p)"
+
         report_markdown = f"""# TONES AI 분석 보고서
 
 - **생성시점**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -1375,9 +1382,9 @@ class DashboardService:
 - **부정 리뷰 수**: {summary['negative_reviews_count']}건 (비율: {summary['negative_reviews_rate']}%)
 
 ## 2. 3대 핵심 품질 속성 만족도
-- **성분 및 피부진정 효과 만족도**: {insights['ingredients']['score']}% (전기 대비 {insights['ingredients']['change']:+.1f}%p)
-- **제형 흡수력 및 발림성 만족도**: {insights['formulation']['score']}% (전기 대비 {insights['formulation']['change']:+.1f}%p)
-- **용기 불량 및 편리성 만족도**: {insights['container']['score']}% (전기 대비 {insights['container']['change']:+.1f}%p)
+- **성분 및 피부진정 효과 만족도**: {_fmt_report_insight(insights['ingredients'])}
+- **제형 흡수력 및 발림성 만족도**: {_fmt_report_insight(insights['formulation'])}
+- **용기 불량 및 편리성 만족도**: {_fmt_report_insight(insights['container'])}
 
 ## 3. 핵심 유의어 및 급상승 키워드 Top 5
 """
