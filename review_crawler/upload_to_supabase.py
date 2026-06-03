@@ -16,8 +16,6 @@ import hashlib
 from datetime import datetime, timezone
 
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
@@ -25,11 +23,6 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 TABLE_PRODUCTS = "products"
 TABLE_REVIEWS = "reviews"
 BATCH_SIZE = 50
-
-# Google Sheets configuration (set via environment variables)
-GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-GOOGLE_WORKSHEET_NAME = os.getenv("GOOGLE_WORKSHEET_NAME", "Sheet1")
 
 # ==================== 제품 정의 ====================
 SKINFOOD_PAD_PRODUCTS = {
@@ -146,27 +139,23 @@ def register_products(conn) -> None:
     cursor.close()
     print(f"✅ 제품 {len(products)}개 upsert 완료")
 
-# ==================== [ADD] Google Sheets 리더 구현 ====================
-def load_reviews_from_google_sheet() -> pd.DataFrame:
-    if not GOOGLE_SERVICE_ACCOUNT_FILE or not GOOGLE_SHEET_ID:
-        print("[ERROR] GOOGLE_SERVICE_ACCOUNT_FILE 또는 GOOGLE_SHEET_ID 환경변수가 설정되지 않았습니다.")
+# ==================== [ADD] CSV 파일 리더 구현 ====================
+def load_reviews_from_csv() -> pd.DataFrame:
+    csv_path = os.getenv(
+        "REVIEW_CSV_PATH",
+        "review_crawler/data/olive_young_reviews.csv"
+    )
+
+    if not os.path.exists(csv_path):
+        print(f"[ERROR] CSV 파일이 존재하지 않습니다: {csv_path}")
         return pd.DataFrame()
-        
+
     try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(GOOGLE_SERVICE_ACCOUNT_FILE, scopes=scope)
-        client = gspread.authorize(creds)
-        sheet = client.open_by_key(GOOGLE_SHEET_ID).worksheet(GOOGLE_WORKSHEET_NAME)
-        data = sheet.get_all_values()
-        if not data:
-            print("[SHEET] 시트가 비어 있습니다.")
-            return pd.DataFrame()
-            
-        headers = data[0]
-        rows = data[1:]
-        return pd.DataFrame(rows, columns=headers)
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
+        print(f"[CSV] loaded_rows={len(df)} path={csv_path}")
+        return df
     except Exception as e:
-        print(f"[ERROR] Google Sheets 로드 오류: {e}")
+        print(f"[ERROR] CSV 로드 실패: {e}")
         return pd.DataFrame()
 
 # ==================== [ADD] 데이터 전처리 및 유효성 검증 ====================
@@ -182,48 +171,58 @@ def preprocess_reviews_for_supabase(df: pd.DataFrame) -> list[dict]:
         return []
 
     for idx, row in df.iterrows():
-        goods_no = str(row.get("goods_no", "")).strip()
-        option_name = str(row.get("option_name", "")).strip()
-        reviewer = str(row.get("username", "")).strip()
-        skin_type = str(row.get("skin_types", "")).strip()
-        raw_rating = row.get("rating", "5")
+        goods_no = str(row.get("goods_no", "")).strip() if pd.notna(row.get("goods_no")) else ""
+        option_name = str(row.get("option_name", "")).strip() if pd.notna(row.get("option_name")) else "단품"
+        reviewer = str(row.get("username", "")).strip() if pd.notna(row.get("username")) else ""
+        skin_type = str(row.get("skin_types", "")).strip() if pd.notna(row.get("skin_types")) else ""
+        raw_rating = row.get("rating")
         raw_date = row.get("date", "")
-        raw_content = row.get("content", "")
-        review_key = str(row.get("review_key", "")).strip()
+        raw_content = str(row.get("content", "")).strip() if pd.notna(row.get("content")) else ""
+        review_key = str(row.get("review_key", "")).strip() if pd.notna(row.get("review_key")) else ""
         
-        # 1. rating 범위 검증 및 정수 변환
-        try:
-            rating = int(raw_rating)
-            if rating < 1 or rating > 5:
-                rating = 5
-        except Exception:
-            rating = 5
-            
-        # 2. 날짜 변환
-        review_date = parse_date(raw_date)
-        
-        # 3. 본문 누락 검증
-        review_text_raw = truncate_text(raw_content)
-        if not review_text_raw:
+        # content가 비어 있거나 300자 미만이면 제외
+        if len(raw_content) < 300:
             skipped += 1
             continue
             
-        # 4. product_id 매핑 누락 검증
+        # review_key가 비어 있으면 제외
+        if not review_key:
+            skipped += 1
+            continue
+            
+        # rating은 정수로 변환
+        try:
+            rating = int(float(raw_rating))
+        except Exception:
+            print(f"[WARNING] 올바르지 않은 평점 값 (행 {idx}): {raw_rating} -> 제외")
+            skipped += 1
+            continue
+            
+        # rating이 1~5 범위를 벗어나면 제외
+        if rating < 1 or rating > 5:
+            print(f"[WARNING] 평점 범위 초과 (행 {idx}): {rating} -> 제외")
+            skipped += 1
+            continue
+            
+        # product_id 매핑에 실패하면 제외하고 로그 출력
         product_id = match_product_id_by_code_and_option(goods_no, option_name)
         if not product_id:
+            print(f"⚠️ 상품 매핑 실패 (행 {idx}): goods_no={goods_no}, option_name={option_name} -> 제외")
             skipped += 1
-            print(f"⚠️ 상품 매핑 실패 (행 {idx}): goods_no={goods_no}, option_name={option_name} -> 건너뜀")
             continue
             
+        # 날짜 변환
+        review_date = parse_date(raw_date)
+        
         # 피부타입 NULL 처리
         if skin_type.lower() in ("nan", "none", ""):
             skin_type = None
             
-        # [FIX] deterministic UUID 기반 ID 생성
+        # deterministic UUID 기반 ID 생성
         row_id = deterministic_uuid(f"skinfood:row:{goods_no}:{reviewer}:{review_date}:{idx}")
         
         # 본문 포맷팅
-        full_text = f"[{goods_no}] {option_name}\n{review_text_raw}"
+        full_text = f"[{goods_no}] {option_name}\n{raw_content}"
         
         record = {
             "id": row_id,
@@ -243,11 +242,12 @@ def preprocess_reviews_for_supabase(df: pd.DataFrame) -> list[dict]:
         }
         records.append(record)
         
-    print(f"✅ 전처리 및 검증 완료: {len(records)}개 성공, {skipped}개 스킵")
+    print(f"[VALIDATE] valid={len(records)} skipped={skipped}")
     return records
 
 # ==================== [ADD] 업로드 전 review_key 기준 최종 중복 제거 ====================
 def deduplicate_reviews_before_upload(records: list[dict]) -> list[dict]:
+    before_count = len(records)
     seen_keys = set()
     deduped = []
     for r in records:
@@ -255,7 +255,7 @@ def deduplicate_reviews_before_upload(records: list[dict]) -> list[dict]:
         if key not in seen_keys:
             seen_keys.add(key)
             deduped.append(r)
-    print(f"✅ 최종 업로드 대상 (중복 제거 후): {len(deduped)}개")
+    print(f"[DEDUPE] before={before_count} after={len(deduped)}")
     return deduped
 
 # ==================== [FIX] Supabase 청크 업로드 및 성공/실패 로깅 ====================
@@ -312,8 +312,8 @@ if __name__ == "__main__":
         
     register_products(conn)
     
-    # 1. Google Sheets에서 DataFrame 로드
-    df = load_reviews_from_google_sheet()
+    # 1. CSV에서 DataFrame 로드
+    df = load_reviews_from_csv()
     if not df.empty:
         # 2. 전처리 및 검증
         records = preprocess_reviews_for_supabase(df)
@@ -325,6 +325,6 @@ if __name__ == "__main__":
         else:
             print("⚠️ 업로드할 레코드가 전처리 결과 존재하지 않습니다.")
     else:
-        print("⚠️ Google Sheets에서 로드된 데이터가 없습니다.")
+        print("⚠️ CSV에서 로드된 데이터가 없습니다.")
         
     conn.close()
