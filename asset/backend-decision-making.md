@@ -80,20 +80,27 @@ TONES_Server/
 │   ├── api/                        # API 엔드포인트 라우터 및 의존성 주입 레이어
 │   │   ├── v1/                     # API 버전 1.0 라우터 그룹
 │   │   │   ├── endpoints/          # 세부 도메인별 API 라우터 실체
+│   │   │   │   ├── admin.py        # 제어센터 - 전체 관리자 계정 CRUD API (GET/POST/PATCH/DELETE)
 │   │   │   │   ├── ai_search.py    # Cloud SQL pgvector 시맨틱 검색 및 Gemini RAG 답변 생성 (POST)
 │   │   │   │   ├── auth.py         # 회원가입 및 JWT 액세스 토큰 발급/로그인 (POST)
-│   │   │   │   ├── dashboard.py    # 제품 목록, 최신 리뷰, 키워드 검색, 벌크 업로드, 레이아웃 저장/로드 등 핵심 통계 API (GET/POST)
+│   │   │   │   ├── dashboard.py    # 대시보드 - 핵심 통계 정보 및 필터링된 데이터 요약 API (GET)
+│   │   │   │   ├── integrations.py # 제어센터 - 외부 연동 상태 정보 API (GET)
+│   │   │   │   ├── layout.py       # 공통 - 위젯 고정 레이아웃 저장/조회 API (GET/PUT/POST)
+│   │   │   │   ├── products.py     # 제품 관리 - 상품 목록 조회, 상품 신규 등록/수정 및 수집 동기화 수동 트리거 API (GET/POST/PATCH)
+│   │   │   │   ├── reviews.py      # 리뷰 분석 - 리뷰 다중 필터 조회, 품질 속성 평균 점수, CSV 내보내기 및 벌크 적재 API (GET/POST)
+│   │   │   │   ├── settings.py     # 제어센터 - 알림 및 시스템 환경 설정 관리 API (GET/PUT/POST)
 │   │   │   │   └── users.py        # 로그인된 사용자 정보 조회 프로필 엔드포인트 (GET)
 │   │   │   └── api.py              # v1 도메인별 라우터들을 하나로 통합하는 마스터 라우터
 │   │   └── deps.py                 # 공통 의존성 주입 (JWT 인증 세션 및 공통 서비스 인스턴스 반환)
 │   │
 │   ├── core/                       # 프로젝트 전역 구성 및 보안 설정
+│   │   ├── cache.py                # 인메모리 TTL 캐시 (TTLCache) 구현 및 싱글톤 캐시 제공
 │   │   ├── config.py               # pydantic-settings 기반 환경변수 (.env) 검증 및 전역 구성 객체
 │   │   └── security.py             # custom 암호화 패스워드 솔팅 해싱 및 PyJWT 암호화/인증 핵심 보안 유틸리티
 │   │
 │   ├── models/                     # 데이터베이스 스키마 및 마이그레이션 관리
 │   │   ├── gcp_schema.sql          # GCP Cloud SQL PostgreSQL 및 pgvector 확장 기능이 활성화된 운영계 데이터베이스 스키마
-│   │   └── schema.sql              # 개발/로컬 테스트용 PostgreSQL 테이블 및 기초 관계 스키마
+│   │   └── new_schema.md           # 신규 데이터베이스 스키마 설계 및 테이블 관계 문서
 │   │
 │   ├── schemas/                    # Pydantic 데이터 검증 레이어 (DTO 역할 수행)
 │   │   ├── ai_search.py            # AI 검색 및 답변 생성에 사용되는 요청/응답 스키마 명세
@@ -104,6 +111,7 @@ TONES_Server/
 │   ├── services/                   # 비즈니스 로직 및 외부 연동 인터페이스 구현
 │   │   ├── ai_service.py           # Gemini 임베딩/생성 API 연동, Cloud SQL pgvector 검색 및 RAG 답변 생성 및 ABSA 분석 구현
 │   │   ├── dashboard_service.py    # PostgreSQL DB 쿼리를 직접 수행하여 대시보드 통계 계산, 자가 치유 적재 및 TTL 캐싱 적용
+│   │   ├── docs_service.py         # Google Docs/Drive API 연동 및 Markdown 보고서 생성/공유 링크 발행 구현
 │   │   └── user_service.py         # 사용자 비밀번호 확인, 신규 등록 및 프로필 반환 등 계정 서비스
 │   │
 │   └── main.py                     # FastAPI 인스턴스 생성, CORS/Sentry 미들웨어 초기 설정 (진입점)
@@ -115,11 +123,14 @@ TONES_Server/
 │   └── test_dashboard.py           # 대시보드 통계 조회 및 레이아웃 제어 API 엔드포인트 통합 테스트
 │
 ├── review_crawler/                 # 데이터 수집 및 데이터 적재 파이프라인 (Local Execution Only)
+│   ├── dump_shadow_dom.py          # 올리브영 웹페이지 Shadow DOM 트리 구조 디버깅 및 덤프 스크립트
 │   ├── olive_young_crawler.py      # Selenium Edge 모바일 에뮬레이션 및 API 인터셉터 기반 올리브영 리뷰 수집 크롤러
 │   └── upload_to_supabase.py       # 크롤링된 XLSX 데이터 분석 및 deterministic UUID5 생성을 거친 Supabase/Cloud SQL 벌크 적재 엔진
 │
+├── .dockerignore                   # Docker 빌드 시 컨테이너에 제외할 파일/폴더 지정 목록
 ├── .env                            # [SECRET] 데이터베이스 소켓 경로, API 키 등의 런타임 환경변수
 ├── .env.example                    # 프로젝트 초기 세팅을 위한 환경변수 템플릿 파일
+├── .env.yaml                       # 로컬 테스트 및 설정용 YAML 포맷 환경변수 백업본
 ├── .gitignore                      # Git 버전 관리에서 제외할 바이너리 및 비밀 정보 목록
 ├── Dockerfile                      # 경량 멀티 스테이지 빌드 기반의 프로덕션 컨테이너 배포 구성 명세
 ├── cloudbuild.yaml                 # GCP Cloud Build 자동 빌드/배포 트리거 파이프라인 설정
@@ -127,6 +138,7 @@ TONES_Server/
 ├── requirements.txt                # 프로덕션 서버 빌드용 파이썬 패키지 최소 의존성 정의 (크롤러 패키지 제외로 빌드 극대화)
 └── README.md                       # 프로젝트 소개 및 로컬 서버 구축 가이드 문서
 ```
+
 
 ---
 
