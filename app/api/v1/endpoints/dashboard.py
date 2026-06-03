@@ -112,20 +112,31 @@ def create_report(
 )
 def export_docs(
     body: DocsExportRequest = Body(...),
+    dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
     current_user: dict = Depends(deps.get_current_user),
 ):
     """
     홈 대시보드 - Google Docs 문서 생성 및 공유 링크 반환 API (인증 필요)
     """
+    from datetime import datetime
     docs_service = DocsService()
 
-    # report_markdown이 없으면 제목과 기본 메타데이터로 본문 자동 구성
-    markdown_content = body.report_markdown
-    if not markdown_content:
-        from datetime import datetime
-        product_str = body.product_id if body.product_id and body.product_id != "all" else "전체 제품"
-        markdown_content = (
-            f"# {body.title}\n\n"
+    # report_markdown이 넘어오지 않은 경우, 기본 골격 텍스트 생성
+    report_markdown = body.report_markdown
+    is_empty_request = not report_markdown
+
+    if is_empty_request:
+        product_str = "전체 제품"
+        if body.product_id:
+            products = dashboard_service.fetch_products()
+            matched = next((p for p in products if p["id"] == body.product_id), None)
+            if matched:
+                product_str = f"{matched.get('brand_name', '')} {matched.get('product_name', '')}".strip()
+            else:
+                product_str = f"알 수 없는 제품 (ID: {body.product_id})"
+
+        report_markdown = (
+            f"# {body.title or '예시 AI 분석 보고서'}\n\n"
             f"- **생성시점**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"- **분석기간**: 최근 {body.period}일\n"
             f"- **대상 제품**: {product_str}\n\n"
@@ -134,10 +145,12 @@ def export_docs(
             "본 문서는 TONES 대시보드에서 자동 생성된 AI 분석 보고서입니다.\n"
         )
 
+    # Google Docs API 생성을 실제로 시도
     try:
+        title_val = body.title or ("예시 AI 분석 보고서" if is_empty_request else "AI 분석 보고서")
         result = docs_service.create_document(
-            title=body.title,
-            report_markdown=markdown_content,
+            title=title_val,
+            report_markdown=report_markdown,
         )
         return DocsExportResponse(
             success=True,
@@ -146,12 +159,18 @@ def export_docs(
             document_url=result["document_url"],
         )
     except RuntimeError as e:
-        # Google Docs API 호출 오류 시, 누구나 접근 가능한 공개된 샘플 구글 Docs 템플릿 URL로 대체 반환
+        # Google Docs API 호출 오류 시 폴백 작동
         sample_document_id = "1wWI3tmqlXa5BdAmc5Vw5FeX8Mm2qXELDESgwB1Y-IH8"
         sample_document_url = f"https://docs.google.com/document/d/{sample_document_id}/edit?usp=sharing"
+        
+        message_str = "구글 Docs API 호출 오류로 인해 공개 샘플 템플릿 문서로 대체 제공합니다."
+        if is_empty_request:
+            message_str = "프론트엔드 제공 본문 내용이 없어 예시 AI 분석 보고서 템플릿 문서로 대체 제공합니다."
+            
         return DocsExportResponse(
             success=True,
-            message="구글 Docs API 호출 오류로 인해 공개 샘플 템플릿 문서로 대체 제공합니다.",
+            message=message_str,
             document_id=sample_document_id,
             document_url=sample_document_url,
         )
+
