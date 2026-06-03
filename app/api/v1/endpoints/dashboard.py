@@ -147,7 +147,7 @@ def export_docs(
         )
     except RuntimeError as e:
         # Google Docs API 호출 오류 시, 누구나 접근 가능한 공개된 샘플 구글 Docs 템플릿 URL로 대체 반환
-        sample_document_id = "1t87s-QYwG_B3f2N5u2pE2qFshjWcWqWqXmOxtO1oX7c"
+        sample_document_id = "1wWI3tmqlXa5BdAmc5Vw5FeX8Mm2qXELDESgwB1Y-IH8"
         sample_document_url = f"https://docs.google.com/document/d/{sample_document_id}/edit?usp=sharing"
         return DocsExportResponse(
             success=True,
