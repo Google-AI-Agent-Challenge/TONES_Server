@@ -223,3 +223,36 @@ def test_products_management_and_admin_crud(client: TestClient):
     reset_resp = client.post(f"{settings.API_V1_STR}/settings/reset", headers=headers)
     assert reset_resp.status_code == 200
     assert reset_resp.json()["success"] is True
+
+
+def test_export_docs_empty_request_fallback(client: TestClient):
+    # 1. 로그인
+    login_response = client.post(
+        f"{settings.API_V1_STR}/auth/login",
+        json={
+            "email": "test@example.com",
+            "password": "testpassword"
+        }
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. report_markdown이 빈 상태로 POST /dashboard/export/docs 호출
+    response = client.post(
+        f"{settings.API_V1_STR}/dashboard/export/docs",
+        json={
+            "title": "테스트용 분석 보고서",
+            "period": 7,
+            "product_id": None,
+            "report_markdown": None
+        },
+        headers=headers
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "document_url" in data
+    assert data["document_url"] is not None
+
