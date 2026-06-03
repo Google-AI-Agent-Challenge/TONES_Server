@@ -1369,11 +1369,13 @@ class DashboardService:
         period_days: Optional[int] = None,
         sentiment: Optional[str] = None,
         q: Optional[str] = None,
+        priority: bool = False,
     ) -> int:
         """
         리뷰 전체 건수 조회 - 분할 병렬 로딩의 청크 수 계산용
+        priority=True 시 우선 확인 리뷰(sentiment=negative AND rating<=2)만 집계
         """
-        cache_key = ("reviews_count", product_id, period_days, sentiment, q)
+        cache_key = ("reviews_count", product_id, period_days, sentiment, q, priority)
         hit, cached = dashboard_cache.get(cache_key, _TTL_REVIEWS_COUNT)
         if hit:
             print(f"[DashboardService] reviews_count 캐시 히트 (TTL {_TTL_REVIEWS_COUNT}s): {cache_key}")
@@ -1392,7 +1394,10 @@ class DashboardService:
                     start_date = (datetime.now().date() - timedelta(days=period_days)).isoformat()
                     where_clauses.append("review_date >= %s::date")
                     params.append(start_date)
-                if sentiment:
+                if priority:
+                    where_clauses.append("sentiment = 'negative'::sentiment_type")
+                    where_clauses.append("rating <= 2")
+                elif sentiment:
                     where_clauses.append("sentiment = %s::sentiment_type")
                     params.append(sentiment)
                 if q:
@@ -1407,7 +1412,11 @@ class DashboardService:
                 return count
             except Exception as e:
                 print(f"[DashboardService.fetch_reviews_count] DB 조회 실패, Mock 건수 반환: {e}")
-        count = len(MOCK_REVIEWS)
+
+        reviews = MOCK_REVIEWS
+        if priority:
+            reviews = [r for r in reviews if r.get("sentiment") == "negative" and r.get("rating", 3) <= 2]
+        count = len(reviews)
         dashboard_cache.set(cache_key, count)
         return count
 
@@ -1417,11 +1426,13 @@ class DashboardService:
         period_days: Optional[int] = None,
         sentiment: Optional[str] = None,
         q: Optional[str] = None,
+        priority: bool = False,
         page: int = 1,
         limit: int = 20
     ) -> List[dict]:
         """
         리뷰 분석 - 다중 조건 필터 및 키워드/텍스트 전문 검색 기능이 결합된 리뷰 상세 목록 조회
+        priority=True 시 우선 확인 리뷰(sentiment=negative AND rating<=2)만 반환
         """
         offset = (page - 1) * limit
         if self.conn is not None:
@@ -1438,7 +1449,10 @@ class DashboardService:
                     start_date = (today - timedelta(days=period_days)).isoformat()
                     where_clauses.append("r.review_date >= %s::date")
                     params.append(start_date)
-                if sentiment:
+                if priority:
+                    where_clauses.append("r.sentiment = 'negative'::sentiment_type")
+                    where_clauses.append("r.rating <= 2")
+                elif sentiment:
                     where_clauses.append("r.sentiment = %s::sentiment_type")
                     params.append(sentiment)
                 if q:
@@ -1447,8 +1461,8 @@ class DashboardService:
 
                 where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
                 sql = f"""
-                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating, 
-                           r.review_date::text, r.sentiment::text, r.sentiment_score, 
+                    SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating,
+                           r.review_date::text, r.sentiment::text, r.sentiment_score,
                            COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{{}}') AS keywords,
                            r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
                            r.score_ingredients, r.score_formulation, r.score_container,
@@ -1477,18 +1491,14 @@ class DashboardService:
         filtered = MOCK_REVIEWS
         if product_id:
             filtered = [r for r in filtered if r.get("product_id") == product_id]
-        if sentiment:
+        if priority:
+            filtered = [r for r in filtered if r.get("sentiment") == "negative" and r.get("rating", 3) <= 2]
+        elif sentiment:
             filtered = [r for r in filtered if r.get("sentiment") == sentiment]
         if q:
             filtered = [r for r in filtered if q.lower() in r.get("review_text", "").lower()]
-        
-        return filtered[offset:offset+limit]
 
-        return {
-            "score_ingredients": round(t_attr["ingredients"], 4),
-            "score_formulation": round(t_attr["formulation"], 4),
-            "score_container": round(t_attr["container"], 4)
-        }
+        return filtered[offset:offset + limit]
 
     def fetch_products_stats(self) -> dict:
         """
