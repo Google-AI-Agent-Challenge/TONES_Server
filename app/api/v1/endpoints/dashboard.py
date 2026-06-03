@@ -148,5 +148,5 @@ def export_docs(
     except RuntimeError as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Google Docs API 호출 중 오류가 발생했습니다. GCP 서비스 계정 권한을 확인해주세요.",
+            detail=f"Google Docs API 호출 중 오류가 발생했습니다: {str(e)}",
         )

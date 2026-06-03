@@ -11,6 +11,7 @@ DocsService: Google Docs API v1 연동 서비스 (GCP 서비스 계정 JSON 키 
 """
 
 import json
+import os
 import httpx
 from app.core.config import settings
 
@@ -26,19 +27,42 @@ _DRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
 
 def _get_service_account_info() -> dict:
     """
-    환경변수 GOOGLE_SERVICE_ACCOUNT_JSON에서 서비스 계정 자격증명을 파싱해 반환.
-    값이 없거나 파싱 실패 시 RuntimeError 발생.
+    서비스 계정 자격증명을 로드해 반환.
+
+    우선순위:
+    1. GOOGLE_SERVICE_ACCOUNT_JSON 환경변수 (JSON 문자열 직접 주입 — Cloud Run/운영 환경)
+    2. GOOGLE_SERVICE_ACCOUNT_KEY_FILE 환경변수 (JSON 키 파일 경로 — 로컬 개발 환경)
+
+    모두 없거나 유효하지 않으면 RuntimeError 발생.
     """
+    # 1순위: JSON 문자열 env var
     raw = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_JSON", None)
-    if not raw or raw.startswith("your-"):
-        raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_JSON 환경변수가 설정되지 않았습니다. "
-            "GCP 서비스 계정 JSON 키를 환경변수에 설정해 주세요."
-        )
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"GOOGLE_SERVICE_ACCOUNT_JSON 파싱 실패: {e}")
+    if raw and not raw.startswith("your-"):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"GOOGLE_SERVICE_ACCOUNT_JSON 파싱 실패: {e}")
+
+    # 2순위: 키 파일 경로 env var (로컬 개발 fallback)
+    key_file = getattr(settings, "GOOGLE_SERVICE_ACCOUNT_KEY_FILE", None)
+    if key_file:
+        abs_path = os.path.abspath(key_file)
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            raise RuntimeError(
+                f"서비스 계정 키 파일을 찾을 수 없습니다: {abs_path}\n"
+                "GOOGLE_SERVICE_ACCOUNT_KEY_FILE 경로를 확인해 주세요."
+            )
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"서비스 계정 키 파일 파싱 실패 ({abs_path}): {e}")
+
+    raise RuntimeError(
+        "Google Docs API 서비스 계정 자격증명이 설정되지 않았습니다.\n"
+        "• 운영 환경: GOOGLE_SERVICE_ACCOUNT_JSON 환경변수에 JSON 키 내용을 설정하세요.\n"
+        "• 로컬 개발: GOOGLE_SERVICE_ACCOUNT_KEY_FILE 환경변수에 JSON 키 파일 경로를 설정하세요."
+    )
 
 
 def _get_access_token(service_account_info: dict) -> str:
