@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, Query, Response, Body, HTTPException
 from app.api import deps
 from app.services.dashboard_service import DashboardService
 from app.services.ai_service import AIService
-from app.services.docs_service import DocsService
 from app.schemas.dashboard import DocsExportRequest, DocsExportResponse
 
 router = APIRouter()
@@ -110,67 +109,100 @@ def create_report(
         "(GCP 서비스 계정 활용)"
     ),
 )
-def export_docs(
+async def export_docs(
     body: DocsExportRequest = Body(...),
     dashboard_service: DashboardService = Depends(deps.get_dashboard_service),
+    ai_service: AIService = Depends(deps.get_ai_service),
     current_user: dict = Depends(deps.get_current_user),
 ):
     """
-    홈 대시보드 - Google Docs 문서 생성 및 공유 링크 반환 API (인증 필요)
+    홈 대시보드 - 리포트 마크다운 데이터 반환 API (인증 필요, Google Docs 의존 제거)
     """
     from datetime import datetime
-    docs_service = DocsService()
 
-    # report_markdown이 넘어오지 않은 경우, 기본 골격 텍스트 생성
+    # report_markdown이 넘어오지 않은 경우, 동적 또는 골격 텍스트 생성
     report_markdown = body.report_markdown
     is_empty_request = not report_markdown
 
     if is_empty_request:
-        product_str = "전체 제품"
-        if body.product_id:
-            products = dashboard_service.fetch_products()
-            matched = next((p for p in products if p["id"] == body.product_id), None)
-            if matched:
-                product_str = f"{matched.get('brand_name', '')} {matched.get('product_name', '')}".strip()
-            else:
-                product_str = f"알 수 없는 제품 (ID: {body.product_id})"
-
-        report_markdown = (
-            f"# {body.title or '예시 AI 분석 보고서'}\n\n"
-            f"- **생성시점**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"- **분석기간**: 최근 {body.period}일\n"
-            f"- **대상 제품**: {product_str}\n\n"
-            "---\n\n"
-            "## 📊 분석 요약\n\n"
-            "본 문서는 TONES 대시보드에서 자동 생성된 AI 분석 보고서입니다.\n"
-        )
-
-    # Google Docs API 생성을 실제로 시도
-    try:
-        title_val = body.title or ("예시 AI 분석 보고서" if is_empty_request else "AI 분석 보고서")
-        result = docs_service.create_document(
-            title=title_val,
-            report_markdown=report_markdown,
-        )
-        return DocsExportResponse(
-            success=True,
-            message="구글 문서가 성공적으로 생성되었습니다.",
-            document_id=result["document_id"],
-            document_url=result["document_url"],
-        )
-    except RuntimeError as e:
-        # Google Docs API 호출 오류 시 폴백 작동
-        sample_document_id = "1wWI3tmqlXa5BdAmc5Vw5FeX8Mm2qXELDESgwB1Y-IH8"
-        sample_document_url = f"https://docs.google.com/document/d/{sample_document_id}/edit?usp=sharing"
-        
-        message_str = "구글 Docs API 호출 오류로 인해 공개 샘플 템플릿 문서로 대체 제공합니다."
-        if is_empty_request:
-            message_str = "프론트엔드 제공 본문 내용이 없어 예시 AI 분석 보고서 템플릿 문서로 대체 제공합니다."
+        # product_id 파라미터가 존재하거나 비어있지 않은 문자열인 경우 (요청 파라미터가 있는 경우)
+        if body.product_id and body.product_id.strip():
+            product_id = body.product_id
+            if product_id == "all":
+                product_id = None
             
-        return DocsExportResponse(
-            success=True,
-            message=message_str,
-            document_id=sample_document_id,
-            document_url=sample_document_url,
-        )
+            period = body.period or 7
+            
+            # 1. 대상 제품명 탐색
+            product_str = "전체 제품"
+            if product_id:
+                products = dashboard_service.fetch_products()
+                matched = next((p for p in products if p["id"] == product_id), None)
+                if matched:
+                    product_str = f"{matched.get('brand_name', '')} {matched.get('product_name', '')}".strip()
+                else:
+                    product_str = f"알 수 없는 제품 (ID: {product_id})"
+            
+            # 2. 통계 및 실시간 AI 분석 데이터 조회
+            summary = dashboard_service.fetch_dashboard_summary(product_id, period)
+            insights = dashboard_service.fetch_insights(product_id, period)
+            keywords = dashboard_service.fetch_trending_keywords(product_id, period)
+            
+            briefing_data = await dashboard_service.get_dashboard_statistics(product_id, period, ai_service)
+            ai_briefing = briefing_data.get("ai_briefing", "실시간 트렌드 분석 정보가 존재하지 않습니다.")
+            
+            # 3. 키워드 빈도 표 구성
+            keywords_table = ""
+            for idx, kw in enumerate(keywords[:5], 1):
+                keywords_table += f"| {idx} | {kw.get('keyword', '')} | {kw.get('count', 0)}회 |\n"
+            if not keywords_table:
+                keywords_table = "| - | 언급된 키워드 없음 | - |\n"
+            
+            report_markdown = (
+                f"# {body.title or f'{product_str} VOC AI 분석 보고서'}\n\n"
+                f"- **생성시점**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"- **분석기간**: 최근 {period}일\n"
+                f"- **대상 제품**: {product_str}\n\n"
+                f"---\n\n"
+                f"## 📊 분석 요약\n\n"
+                f"- **총 수집 리뷰**: {summary.get('total_reviews', 0)}건 (전기 대비 {summary.get('total_reviews_diff', 0):+d}건)\n"
+                f"- **평균 만족 별점**: {summary.get('average_rating', 0.0)}점 (전기 대비 {summary.get('average_rating_diff', 0.0):+.2f}점)\n"
+                f"- **부정 리뷰 비율**: {summary.get('negative_reviews_rate', 0.0)}% (전기 대비 {summary.get('negative_reviews_rate_diff', 0.0):+.1f}%p)\n\n"
+                f"### 💡 실시간 AI 분석 브리핑\n"
+                f"{ai_briefing}\n\n"
+                f"## 📝 기타 내용\n\n"
+                f"### 🔑 언급 빈도 최다 핵심 키워드\n"
+                f"| 순위 | 키워드 | 언급 횟수 |\n"
+                f"| :---: | :--- | :---: |\n"
+                f"{keywords_table}\n"
+                f"### 🔍 3대 품질 속성 분석 (성분/제형/용기)\n"
+                f"- **성분 및 피부 진정** (만족도: {insights.get('ingredients', {}).get('score', 0.0)}%)\n"
+                f"  - *인사이트*: {insights.get('ingredients', {}).get('insight_text', '정보 없음')}\n"
+                f"- **제형 및 발림성** (만족도: {insights.get('formulation', {}).get('score', 0.0)}%)\n"
+                f"  - *인사이트*: {insights.get('formulation', {}).get('insight_text', '정보 없음')}\n"
+                f"- **용기 및 편의성** (만족도: {insights.get('container', {}).get('score', 0.0)}%)\n"
+                f"  - *인사이트*: {insights.get('container', {}).get('insight_text', '정보 없음')}\n"
+            )
+        # 요청 파라미터가 없는 경우 (product_id가 생략되었거나 빈 문자열인 경우)
+        else:
+            report_markdown = (
+                f"# {body.title or '[제목] 예시 AI 분석 보고서'}\n\n"
+                f"- **생성시점**: [생성시점]\n"
+                f"- **분석기간**: [분석기간]\n"
+                f"- **대상 제품**: [대상 제품]\n\n"
+                f"---\n\n"
+                f"## 📊 분석 요약\n\n"
+                f"[이곳에 분석 요약 내용을 작성하십시오.]\n\n"
+                f"## 📝 기타 내용\n\n"
+                f"- **주요 속성 만족도**: [성분/제형/용기 분석 데이터 없음]\n"
+                f"- **핵심 키워드**: [급상승 키워드 분석 데이터 없음]\n"
+            )
+
+    return DocsExportResponse(
+        success=True,
+        message="리포트 마크다운이 성공적으로 생성되었습니다.",
+        document_id=None,
+        document_url=None,
+        report_markdown=report_markdown,
+    )
 

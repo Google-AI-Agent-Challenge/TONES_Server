@@ -253,6 +253,7 @@ def test_export_docs_empty_request_fallback(client: TestClient):
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
-    assert "document_url" in data
-    assert data["document_url"] is not None
+    assert "report_markdown" in data
+    assert data["report_markdown"] is not None
+    assert data["document_url"] is None
 
