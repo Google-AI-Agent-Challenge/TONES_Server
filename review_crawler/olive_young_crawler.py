@@ -777,10 +777,12 @@ def click_next_page(driver):
     """)
     return clicked
 
-# ==============================================================================
-# 조건 수집
-# ==============================================================================
+# [ADD] 전역 기존 수집된 리뷰 키 세트
+ALREADY_COLLECTED_KEYS = set()
+TOTAL_COLLECTED_TEMP_COUNT = 0
+
 def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, skin_type, sort_type, args):
+    global ALREADY_COLLECTED_KEYS, TOTAL_COLLECTED_TEMP_COUNT
     limit_revs = args.limit_reviews
     max_pages = args.max_pages
     delay = 1.2
@@ -789,6 +791,11 @@ def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, sk
     # [FIX] __oyBatches 초기화를 여기서 하지 않음 — 옵션 선택/정렬 직후 API 응답이 이미 쌓여 있음
     
     for page in range(1, max_pages + 1):
+        # [ADD] 전체 수집량 1500개 목표 도달 시 조기 종료
+        if (len(ALREADY_COLLECTED_KEYS) + TOTAL_COLLECTED_TEMP_COUNT + len(collected_reviews)) >= 1500:
+            print("[*] 목표 수집 수 1500개에 도달하여 조건 내 수집을 중단합니다.")
+            break
+
         api_reviews, batch_count = collect_api_reviews(driver, goods_no)
         dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
         
@@ -805,6 +812,12 @@ def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, sk
             verify_suspect_keywords(goods_no, r)
             
             key = r['review_key']
+            
+            # [ADD] 구글 시트에 이미 존재하는 리뷰면 수집 제외
+            if key in ALREADY_COLLECTED_KEYS:
+                dup_count_in_page += 1
+                continue
+
             if key not in collected_reviews:
                 collected_reviews[key] = r
                 new_count_in_page += 1
@@ -814,6 +827,12 @@ def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, sk
         current = len(collected_reviews)
         print(f"[PAGE] option_name='{option_name}' filter_type={filter_type} page={page} found={new_count_in_page+dup_count_in_page} new_unique={new_count_in_page} duplicated={dup_count_in_page}")
         
+        # [ADD] 해당 페이지에서 수집한 리뷰 중 신규 고유 리뷰가 하나도 없고 리뷰 목록 자체는 비어있지 않다면,
+        # 이미 과거에 크롤링한 구글 시트 적재 범위에 닿은 것이므로 다음 페이지 이동 중단
+        if new_count_in_page == 0 and len(api_reviews + dom_reviews) > 0:
+            print(f"[PAGE] 신규 수집된 리뷰가 없어 다음 페이지 이동을 중단합니다.")
+            break
+
         if current >= limit_revs:
             break
             
@@ -824,6 +843,8 @@ def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, sk
         wait_for_review_list_update(driver, None)
         time.sleep(delay + random.uniform(0.1, 0.3))
         
+    # 수집 완료 후 전역 카운터 임시 누적
+    TOTAL_COLLECTED_TEMP_COUNT += len(collected_reviews)
     return list(collected_reviews.values())
 
 # ==============================================================================
@@ -1509,6 +1530,18 @@ def get_reviews_worksheet(client):
         print(f"[ERROR] 워크시트 로드 실패: {e}")
         return None
 
+def load_existing_reviews_from_google_sheet(worksheet):
+    try:
+        records = worksheet.get_all_records()
+        if not records:
+            return pd.DataFrame()
+        df = pd.DataFrame(records)
+        print(f"[SHEET] 기존 시트 데이터 로드 성공: {len(df)}행")
+        return df
+    except Exception as e:
+        print(f"[SHEET] 기존 시트 데이터를 읽을 수 없거나 시트가 비어있습니다: {e}")
+        return pd.DataFrame()
+
 def upload_dataframe_to_google_sheet(df, worksheet):
     if df.empty:
         print("[SHEET] 빈 데이터프레임입니다. 업로드를 건너뜁니다.")
@@ -1529,29 +1562,51 @@ def upload_dataframe_to_google_sheet(df, worksheet):
 def parse_args():
     parser = argparse.ArgumentParser(description="올리브영 11종 패드 리뷰 수집기")
     parser.add_argument("--limit-products", type=int, default=None, help="크롤링할 상품 개수 제한")
-    parser.add_argument("--limit-reviews", type=int, default=100, help="조건당 수집할 최대 리뷰 수")
-    parser.add_argument("--max-pages", type=int, default=10, help="조건당 최대 페이지 수")
+    # [FIX] 1500개 목표 수집을 위해 조건당 리뷰 수 기본값 200, 최대 페이지 20으로 상향
+    parser.add_argument("--limit-reviews", type=int, default=200, help="조건당 수집할 최대 리뷰 수")
+    parser.add_argument("--max-pages", type=int, default=20, help="조건당 최대 페이지 수")
     parser.add_argument("--headless", type=str, default="True", help="Headless 모드 사용 여부 (True/False)")
     parser.add_argument("--skip-google-sheets", action="store_true", help="Google Sheets 업로드 생략")
     parser.add_argument("--dry-run", action="store_true", help="드라이 런 모드")
     return parser.parse_args()
 
 def main():
+    global ALREADY_COLLECTED_KEYS, TOTAL_COLLECTED_TEMP_COUNT
     args = parse_args()
     print("="*60)
     print("  올리브영 스킨푸드 11종 패드 균등 평점 리뷰 수집기")
     print("  방식: API 인터셉터 + Shadow DOM 추출 + 묶음 상품 정렬/필터 루프")
     print("="*60)
 
+    # [ADD] 구글 시트 연동 시 기존 적재 데이터 불러오기 (이어쓰기/중복제거 기반 마련)
+    existing_df = pd.DataFrame()
+    worksheet = None
+    if not args.skip_google_sheets and not args.dry_run:
+        client = get_google_sheet_client()
+        if client:
+            worksheet = get_reviews_worksheet(client)
+            if worksheet:
+                existing_df = load_existing_reviews_from_google_sheet(worksheet)
+                if not existing_df.empty and "review_key" in existing_df.columns:
+                    ALREADY_COLLECTED_KEYS = set(existing_df["review_key"].dropna().astype(str).tolist())
+                    print(f"[*] 구글 시트에서 기존 수집된 고유 리뷰 {len(ALREADY_COLLECTED_KEYS)}개를 불러왔습니다.")
+
     driver = init_driver(args)
     all_reviews = []
+    TOTAL_COLLECTED_TEMP_COUNT = 0
 
     try:
         product_list = list(PRODUCT_PAGES.items())
         if args.limit_products:
             product_list = product_list[:args.limit_products]
 
+        total_goal = 1500
         for idx, (goods_no, page_info) in enumerate(product_list):
+            current_total = len(ALREADY_COLLECTED_KEYS) + TOTAL_COLLECTED_TEMP_COUNT
+            if current_total >= total_goal:
+                print(f"\n[*] 기존 수집 데이터 + 신규 수집 데이터 총합이 {total_goal}개 목표를 달성하여 크롤링을 최종 종료합니다.")
+                break
+
             print(f"\n[PRODUCT] index={idx+1}/{len(product_list)} product_code={goods_no} product_name={page_info['name']}")
             try:
                 page_reviews = crawl_raw_reviews_from_page(driver, goods_no, page_info, args)
@@ -1583,21 +1638,27 @@ def main():
             "sort_type":    r.get("sort_type", "latest")
         })
 
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.drop_duplicates(subset=["review_key"], keep="first")
-        print(f"\n[*] 중복 제거 후 총 {len(df)}개 고유 리뷰가 남아 있습니다.")
+    new_df = pd.DataFrame(rows)
+    
+    # [ADD] 기존 데이터와 신규 데이터 병합 후 중복 제거 저장
+    final_df = pd.DataFrame()
+    if not existing_df.empty:
+        if not new_df.empty:
+            final_df = pd.concat([existing_df, new_df], ignore_index=True)
+        else:
+            final_df = existing_df
+    else:
+        final_df = new_df
+
+    if not final_df.empty:
+        final_df = final_df.drop_duplicates(subset=["review_key"], keep="first")
+        print(f"\n[*] 중복 제거 후 최종적으로 {len(final_df)}개 고유 리뷰가 데이터셋에 존재합니다.")
         
         if not args.skip_google_sheets and not args.dry_run:
-            client = get_google_sheet_client()
-            if client:
-                worksheet = get_reviews_worksheet(client)
-                if worksheet:
-                    upload_dataframe_to_google_sheet(df, worksheet)
-                else:
-                    print("[!] 구글 시트 워크시트를 찾지 못해 업로드를 건너뜁니다.")
+            if worksheet:
+                upload_dataframe_to_google_sheet(final_df, worksheet)
             else:
-                print("[!] 구글 시트 클라이언트 생성 실패로 업로드를 건너뜁니다.")
+                print("[!] 구글 시트 워크시트를 찾지 못해 업로드를 건너뜁니다.")
         else:
             print("[*] Google Sheets 업로드 모드가 비활성화되어 로컬에 캐시합니다 (메모리만 유지).")
     else:
