@@ -1,26 +1,47 @@
+# -*- coding: utf-8 -*-
+# [FIX] Refactored Olive Young Review Crawler with Enhanced Wait & Click Logic
 import time
 import re
 import sys
 import os
 import json
 import random
+import hashlib
+import argparse
 import pandas as pd
-try:
-    from curl_cffi import requests  # noqa: F401 (reserved for future use)
-except ImportError:
-    requests = None
+import gspread
+from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
 sys.stdout.reconfigure(encoding='utf-8')
 
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-OUTPUT_FILENAME = os.path.join(os.path.dirname(__file__), "스킨푸드_패드_고객리뷰.xlsx")
 EDGE_BINARY_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-# ==============================================================================
+
+SKIN_TYPES = {
+    "skin_oily": "지성",
+    "skin_dry": "건성",
+    "skin_combination": "복합성",
+    "skin_sensitive": "민감성",
+    "skin_slightly_dry": "약건성",
+    "skin_trouble": "트러블성",
+    "skin_normal": "중성"
+}
+
+# [ADD] 정렬 타입 상수 (실제 올리브영 UI 텍스트와 일치)
+SORT_TYPES = {
+    "latest": "최신순",
+    "helpful": "도움순",
+    "high_rating": "평점 높은순",
+    "low_rating": "평점 낮은순",
+}
 
 TARGET_PADS = {
     "아스파라거스 패드": {"keywords": ["아스파라거스", "asparagus"],                     "default_goods": "A000000166709"},
@@ -46,9 +67,10 @@ PRODUCT_PAGES = {
     "A000000157075": {"name": "도토리 패드 전용 페이지",  "max_scroll_steps": 200, "target_reviews": 250,  "delay": 0.9},
 }
 
+SUSPECT_KEYWORDS = ["가글", "구강", "치약", "칫솔", "마우스워시", "구취", "잇몸"]
+
 # ==============================================================================
 # JavaScript: XHR + fetch 인터셉터
-# review 탭 클릭 전에 주입 → 이후 모든 /review/api/ 요청 본문을 캡처
 # ==============================================================================
 _INTERCEPTOR_JS = """
 if (!window.__oyIntercepted) {
@@ -93,19 +115,96 @@ if (!window.__oyIntercepted) {
 }
 """
 
-# 캡처된 배치를 수집하고 버퍼를 비움
 _COLLECT_BATCHES_JS = """
 const b = (window.__oyBatches || []).slice();
 window.__oyBatches = [];
 return JSON.stringify(b);
 """
 
+# [FIX] 태그에 구애받지 않고 공백 제거 및 포함 관계(contains)로 매칭하는 유연한 Shadow DOM 클릭 JS
+_JS_CLICK_BY_TEXT = r"""
+return (function(targetText) {
+    console.warn("=== CLICK_BY_TEXT START ===", targetText);
+    function findAndClick(root, depth = 0) {
+        if (!root) return false;
+        const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+        const target = targetText.replace(/\s+/g, '');
+        console.warn("Depth:", depth, "Elements count:", all.length, "Target:", target);
+        
+        for (let i = all.length - 1; i >= 0; i--) {
+            const el = all[i];
+            const txt = el.textContent.replace(/\s+/g, '');
+            if (txt.includes(target)) {
+                console.warn("Found match candidate:", el.tagName, "offsetWidth:", el.offsetWidth, "text:", txt.substring(0, 30));
+                if (el.offsetWidth > 0) {
+                    try {
+                        let clickTarget = el;
+                        let curr = el;
+                        while (curr && curr !== document.body) {
+                            if (curr.tagName && curr.tagName.toLowerCase() === 'button') {
+                                clickTarget = curr;
+                                break;
+                            }
+                            if (curr.shadowRoot) {
+                                const btn = curr.shadowRoot.querySelector('button');
+                                if (btn) {
+                                    clickTarget = btn;
+                                    break;
+                                }
+                            }
+                            curr = curr.parentElement || (curr.parentNode && curr.parentNode.host ? curr.parentNode.host : null);
+                        }
+                        console.warn("Clicking target element:", clickTarget.tagName);
+                        clickTarget.click();
+                        return true;
+                    } catch(e) {
+                        console.error("Click execution failed:", e);
+                    }
+                }
+            }
+        }
+        for (const el of all) {
+            if (el.shadowRoot) {
+                if (findAndClick(el.shadowRoot, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+    const res = findAndClick(document);
+    console.warn("=== CLICK_BY_TEXT END ===", res);
+    return res;
+})(arguments[0]);
+"""
+
+# [FIX] Shadow DOM 관통 클래스 셀렉터 클릭 JS
+_JS_CLICK_BY_CLASS = """
+(function(selector) {
+    function findAndClick(root) {
+        if (!root) return false;
+        const el = root.querySelector ? root.querySelector(selector) : null;
+        if (el) {
+            if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+                el.click();
+                return true;
+            }
+        }
+        const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+        for (const sub of all) {
+            if (sub.shadowRoot) {
+                if (findAndClick(sub.shadowRoot)) return true;
+            }
+        }
+        return false;
+    }
+    return findAndClick(document);
+})(arguments[0]);
+"""
+
 # ==============================================================================
 # JavaScript: Shadow DOM 직접 추출
-# 렌더링된 oy-review-review-item 요소에서 데이터 파싱
 # ==============================================================================
 _EXTRACT_JS = """
-(function(goodsNo) {
+return (function(goodsNo) {
     const reviews = [];
     const seen    = new Set();
 
@@ -136,7 +235,7 @@ _EXTRACT_JS = """
 
         const optEl = sr.querySelector('div.goods-option');
         let option  = optEl ? optEl.textContent.trim() : '단품';
-        option = option.replace(/^\\[옵션\\]\\s*/, '').trim() || '단품';
+        option = option.replace(/^\\s*\\[옵션\\]\\s*/, '').trim() || '단품';
 
         const ratingDiv = sr.querySelector('div.rating');
         let rating = 5;
@@ -180,7 +279,6 @@ _EXTRACT_JS = """
                      || userComp.shadowRoot.querySelector('[class*="author"]');
             if (uEl) username = uEl.textContent.trim() || '익명';
 
-            // 피부타입 추출 보강
             const skinEl = userComp.shadowRoot.querySelector('.skin-types');
             if (skinEl) {
                 skinTypes = Array.from(skinEl.querySelectorAll('.skin-type'))
@@ -190,10 +288,16 @@ _EXTRACT_JS = """
             }
         }
 
+        let reviewId = '';
+        try {
+            reviewId = item.getAttribute('review-id') || item.getAttribute('id') || '';
+        } catch(e) {}
+
         const key = date + '::' + content.substring(0, 40);
         if (!seen.has(key)) {
             seen.add(key);
             reviews.push({
+                review_id:   reviewId,
                 goods_no:    goodsNo,
                 username:    username,
                 skin_types:  skinTypes,
@@ -204,95 +308,138 @@ _EXTRACT_JS = """
             });
         }
     }
-    return reviews;
+    return JSON.stringify(reviews);
 })(arguments[0]);
 """
 
-# 마지막 oy-review-review-item을 뷰포트로 스크롤 (가상 스크롤 트리거)
-_SCROLL_LAST_ITEM_JS = """
-(function() {
-    function findAll(root, tagLower, depth) {
-        if (!root || depth > 9) return [];
-        let found = [];
-        try {
-            for (const el of Array.from(root.querySelectorAll ? root.querySelectorAll('*') : [])) {
-                if (el.tagName && el.tagName.toLowerCase() === tagLower) found.push(el);
-                if (el.shadowRoot) found = found.concat(findAll(el.shadowRoot, tagLower, depth + 1));
-            }
-        } catch(e) {}
-        return found;
-    }
-    const items = findAll(document, 'oy-review-review-item', 0);
-    if (items.length > 0) {
-        items[items.length - 1].scrollIntoView({behavior: 'instant', block: 'end'});
-        window.scrollBy(0, 200);
-        return items.length;
-    }
-    window.scrollBy(0, 800);
-    return 0;
-})();
-"""
-
-
 # ==============================================================================
-# API 응답 파싱 및 피부타입 코드 디코딩
+# API Decoding
 # ==============================================================================
-
-SKIN_TYPE_MAP = {
-    "A01": "지성",
-    "A02": "건성",
-    "A03": "복합성",
-    "A04": "중성",
-    "A05": "약건성",
-}
-
-SKIN_TONE_MAP = {
-    "B01": "웜톤",
-    "B02": "쿨톤",
-    "B03": "봄웜톤",
-    "B04": "여름쿨톤",
-    "B05": "가을웜톤",
-    "B06": "겨울쿨톤",
-}
-
-SKIN_TROUBLE_MAP = {
-    "C01": "민감성",
-    "C02": "잡티",
-    "C03": "모공",
-    "C04": "각질",
-    "C05": "트러블",
-    "C06": "블랙헤드",
-    "C07": "주름",
-    "C08": "미백",
-}
+SKIN_TYPE_MAP = {"A01": "지성", "A02": "건성", "A03": "복합성", "A04": "중성", "A05": "약건성"}
+SKIN_TONE_MAP = {"B01": "웜톤", "B02": "쿨톤", "B03": "봄웜톤", "B04": "여름쿨톤", "B05": "가을웜톤", "B06": "겨울쿨톤"}
+SKIN_TROUBLE_MAP = {"C01": "민감성", "C02": "잡티", "C03": "모공", "C04": "각질", "C05": "트러블", "C06": "블랙헤드", "C07": "주름", "C08": "미백"}
 
 def decode_skin_types(profile_dto):
-    """API의 profileDto에 포함된 피부타입/톤/고민 코드를 한글 텍스트로 복원."""
     if not profile_dto or not isinstance(profile_dto, dict):
         return ""
-    
     parts = []
-    
-    # 1. 피부 타입 (skinType)
     st = profile_dto.get("skinType")
-    if st:
-        parts.append(SKIN_TYPE_MAP.get(st, st))
-        
-    # 2. 피부 톤 (skinTone)
+    if st: parts.append(SKIN_TYPE_MAP.get(st, st))
     stone = profile_dto.get("skinTone")
-    if stone:
-        parts.append(SKIN_TONE_MAP.get(stone, stone))
-        
-    # 3. 피부 고민 (skinTrouble - 리스트)
+    if stone: parts.append(SKIN_TONE_MAP.get(stone, stone))
     troubles = profile_dto.get("skinTrouble") or []
     for tr in troubles:
-        if tr:
-            parts.append(SKIN_TROUBLE_MAP.get(tr, tr))
-            
+        if tr: parts.append(SKIN_TROUBLE_MAP.get(tr, tr))
     return ", ".join(filter(None, parts))
 
+# ==============================================================================
+# Helper Functions
+# ==============================================================================
+def check_login_required(driver):
+    current_url = driver.current_url.lower()
+    if "login" in current_url or "sso" in current_url:
+        print("[!] 로그인 요구 페이지로 리다이렉트됨.")
+        return True
+    
+    has_login_popup = driver.execute_script("""
+        function checkLoginPopup(root) {
+            if (!root) return false;
+            const elements = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const el of elements) {
+                const txt = (el.textContent || '').trim();
+                if (txt === "로그인" && (el.tagName === 'BUTTON' || el.tagName === 'A') && el.offsetWidth > 0) {
+                    if (el.closest && el.closest('[class*="popup"], [class*="modal"]')) {
+                        return true;
+                    }
+                }
+            }
+            for (const sub of elements) {
+                if (sub.shadowRoot) {
+                    if (checkLoginPopup(sub.shadowRoot)) return true;
+                }
+            }
+            return false;
+        }
+        return checkLoginPopup(document);
+    """)
+    if has_login_popup:
+        print("[!] 로그인 팝업 또는 폼 감지됨.")
+        return True
+    return False
+
+def wait_for_review_list_update(driver, prev_first_review_key, timeout=8):
+    get_first_review_js = """
+        function findFirstReview(root) {
+            if (!root) return null;
+            const item = root.querySelector ? root.querySelector('oy-review-review-item') : null;
+            if (item) return item;
+            const elements = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const sub of elements) {
+                if (sub.shadowRoot) {
+                    const found = findFirstReview(sub.shadowRoot);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+        return findFirstReview(document);
+    """
+    try:
+        prev_el = driver.execute_script(get_first_review_js)
+    except Exception:
+        prev_el = None
+        
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            current_el = driver.execute_script(get_first_review_js)
+            if prev_el is None:
+                if current_el is not None:
+                    time.sleep(0.5)
+                    return True
+            else:
+                try:
+                    _ = prev_el.is_enabled()
+                    if current_el != prev_el:
+                        time.sleep(0.5)
+                        return True
+                except StaleElementReferenceException:
+                    time.sleep(0.5)
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.2)
+    return False
+
+def normalize_whitespace(text):
+    if not text:
+        return ""
+    text = str(text).replace('\r', '').replace('\n', ' ').replace('\t', ' ')
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+def build_review_key(review):
+    r_id = review.get('review_id')
+    if r_id:
+        return str(r_id).strip()
+    goods_no = str(review.get('goods_no', '')).strip()
+    rating = str(review.get('rating', '5')).strip()
+    content = normalize_whitespace(review.get('content', ''))
+    raw_str = f"{goods_no}_{rating}_{content}"
+    h = hashlib.sha256(raw_str.encode('utf-8'))
+    return h.hexdigest()
+
+def verify_suspect_keywords(goods_no, review):
+    content = review.get('content', '')
+    for kw in SUSPECT_KEYWORDS:
+        if kw in content:
+            print(f"[SUSPECT] product_code={goods_no} keyword={kw} review_text={content[:100]}...")
+            break
+
+# ==============================================================================
+# API Ingestion
+# ==============================================================================
 def parse_api_batch(body_text, goods_no):
-    """인터셉트된 API 응답 JSON 한 건에서 리뷰 목록 추출."""
     reviews = []
     try:
         data = json.loads(body_text)
@@ -301,11 +448,10 @@ def parse_api_batch(body_text, goods_no):
 
     _d = data.get('data')
     _r = data.get('result')
-    # 실제 API 응답: {"data": {"goodsReviewList": [...]}}
     review_list = (
         data.get('goodsReviewList') or
         data.get('reviewList') or
-        (_d.get('goodsReviewList') if isinstance(_d, dict) else None) or  # ← 실제 키
+        (_d.get('goodsReviewList') if isinstance(_d, dict) else None) or
         (_d.get('reviewList')      if isinstance(_d, dict) else None) or
         (_r.get('goodsReviewList') if isinstance(_r, dict) else None) or
         (_r.get('reviewList')      if isinstance(_r, dict) else None) or
@@ -315,17 +461,23 @@ def parse_api_batch(body_text, goods_no):
     if not isinstance(review_list, list):
         return reviews
 
+    # [FIX] 진단 로그 출력
+    print(f"[DEBUG_API] review_list_count={len(review_list)}")
+
     for r in review_list:
         if not isinstance(r, dict):
             continue
 
-        # 실제 필드: content (reviewContents 등도 시도)
+        # [FIX] 묶음 상품에서 옵션별 goods_no가 부모와 다를 수 있으므로 로그만 남기고 건너뛰지 않음
+        resp_goods_no = r.get('goodsNo') or r.get('goodsDto', {}).get('goodsNo')
+        if resp_goods_no and str(resp_goods_no) != str(goods_no):
+            print(f"[DEBUG_API] response_goods_no={resp_goods_no} (parent={goods_no}, 묶음상품 허용)")
+
         content = (r.get('content') or r.get('reviewContents') or
                    r.get('reviewContent') or r.get('contents') or '').strip()
         if not content or len(content) < 5:
             continue
 
-        # 날짜: createdDateTime 최우선 적용 → 여러 필드명 시도 → 없으면 사진 경로 날짜 → reviewId 사용
         date = (r.get('createdDateTime') or r.get('reviewDt') or r.get('regDt') or r.get('date') or
                 r.get('createDt') or r.get('writeDate') or r.get('createDate') or '').strip()
         if not date:
@@ -335,9 +487,8 @@ def parse_api_batch(body_text, goods_no):
                 if m:
                     date = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
         if not date:
-            date = str(r.get('reviewId', ''))  # 최후 수단: ID를 날짜 대체로 사용
+            date = str(r.get('reviewId', ''))
 
-        # 닉네임: memberNickname(profileDto 내부) 또는 nickName 등 최우선 시도
         profile_dto = r.get('profileDto') or {}
         username = (profile_dto.get('memberNickname') or r.get('memberNickNm') or r.get('nickName') or
                     r.get('nickname') or r.get('writerNm') or r.get('memberName') or '익명').strip() or '익명'
@@ -348,15 +499,12 @@ def parse_api_batch(body_text, goods_no):
         except Exception:
             rating = 5
 
-        # 옵션: 최상위 필드 또는 goodsDto 안에 있음
         goods_dto = r.get('goodsDto') or {}
         option = (r.get('goodsOptionNm') or r.get('optionNm') or r.get('optionName') or
                   goods_dto.get('optionName') or goods_dto.get('goodsName') or '단품').strip()
-        option = re.sub(r'^\[옵션\]\s*', '', option).strip() or '단품'
+        option = re.sub(r'^\\s*\\[옵션\\]\\s*', '', option).strip() or '단품'
 
         review_id = str(r.get('reviewId', ''))
-
-        # 피부타입: profileDto 내 코드 디코딩 처리
         skin_types = decode_skin_types(profile_dto)
 
         reviews.append({
@@ -372,47 +520,59 @@ def parse_api_batch(body_text, goods_no):
 
     return reviews
 
-
-_cursor_body_logged = False  # /cursor 응답 본문 최초 1회만 출력
-
 def collect_api_reviews(driver, goods_no):
-    """버퍼에 쌓인 API 배치를 모두 수집하고 버퍼를 초기화."""
-    global _cursor_body_logged
     raw = driver.execute_script(_COLLECT_BATCHES_JS)
     batches = json.loads(raw or '[]')
+    print(f"[DEBUG_API] batch_count={len(batches)}")
     reviews = []
     for b in batches:
         url  = b.get('url', '')
         body = b.get('body', '')
-        # URL은 항상 출력 (한 줄 요약)
-        short_url = url.split('?')[0].replace('https://m.oliveyoung.co.kr', '')
-        print(f"    [API] {b.get('src','').upper():5} {short_url} → {b.get('status','')}")
-        # /cursor 첫 응답 본문만 상세 출력 (필드명 확인용)
-        if not _cursor_body_logged and '/cursor' in url and body:
-            print(f"    [CURSOR body 800c] {body[:800]}")
-            _cursor_body_logged = True
-        reviews.extend(parse_api_batch(body, goods_no))
+        parsed = parse_api_batch(body, goods_no)
+        reviews.extend(parsed)
+    print(f"[DEBUG_API] parsed_review_count={len(reviews)}")
     return reviews, len(batches)
 
-
 def extract_reviews_from_shadow_dom(driver, goods_no):
-    """Shadow DOM에서 현재 렌더링된 리뷰 추출."""
     try:
+        # [ADD] Shadow DOM 태그명 진단
+        tag_check = driver.execute_script(r"""
+            function findTags(root, depth) {
+                if (!root || depth > 5) return [];
+                const tags = [];
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                    if (tag.startsWith('oy-review')) tags.push(tag);
+                    if (el.shadowRoot) {
+                        tags.push(...findTags(el.shadowRoot, depth + 1));
+                    }
+                }
+                return [...new Set(tags)];
+            }
+            return JSON.stringify(findTags(document, 0));
+        """)
+        print(f"[DEBUG_DOM] oy-review 태그 목록: {tag_check}")
+
         result = driver.execute_script(_EXTRACT_JS, goods_no)
+        if isinstance(result, str):
+            parsed = json.loads(result)
+            print(f"[DEBUG_DOM] shadow DOM 추출 리뷰 수: {len(parsed)}")
+            return parsed
+        print(f"[DEBUG_DOM] shadow DOM 추출 결과 타입: {type(result)}, 값: {result}")
         return result if result else []
     except Exception as e:
-        print(f"    [!] Shadow DOM 추출 오류: {e}")
+        print(f"[!] shadow DOM 추출 에러: {e}")
         return []
 
-
 # ==============================================================================
-# Selenium 드라이버 초기화
+# Edge Driver Init
 # ==============================================================================
-
-def init_driver():
+def init_driver(args):
     print("\n[*] Edge 모바일 에뮬레이션 드라이버를 초기화하는 중...")
     options = Options()
-    options.add_argument("--headless")
+    if args.headless.lower() == "true":
+        options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -422,18 +582,17 @@ def init_driver():
         "user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
         "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
     )
+    
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    options.add_experimental_option("prefs", prefs)
+
     try:
         driver = webdriver.Edge(options=options)
-        print("[*] 드라이버 초기화 완료 (375×812 모바일 뷰포트).")
+        print("[*] 드라이버 초기화 완료.")
         return driver
     except Exception as e:
         print(f"[!] 드라이버 초기화 실패: {e}")
         sys.exit(1)
-
-
-# ==============================================================================
-# 크롤링 보조 함수
-# ==============================================================================
 
 def _dismiss_popups(driver):
     driver.execute_script("""
@@ -456,14 +615,8 @@ def _dismiss_popups(driver):
         document.body.style.position  = 'static';
     """)
 
-
 def _activate_review_tab(driver):
-    """
-    '리뷰' 탭 클릭 후 oy-review-review-in-product 마운트를 폴링으로 확인.
-    마운트가 확인될 때까지 최대 20초 대기.
-    """
-    _SKIP_CLS = ("ReviewArea_btn-review", "ReviewArea_review-thumbs",
-                 "review-count", "review-score")
+    _SKIP_CLS = ("ReviewArea_btn-review", "ReviewArea_review-thumbs", "review-count", "review-score")
 
     def _try_click(el):
         try:
@@ -480,13 +633,8 @@ def _activate_review_tab(driver):
             pass
         return False
 
-    # 1순위: GoodsDetailTabs 내부 탭 항목 (첫 성공 즉시 탈출)
     clicked = False
-    for selector in ["[class*='GoodsDetailTabs'] li",
-                     "[class*='GoodsDetailTabs'] button",
-                     "li[role='tab']", "button[role='tab']",
-                     ".tab_menu li", "[class*='tab-menu'] li",
-                     "[class*='detail-tab'] li"]:
+    for selector in ["[class*='GoodsDetailTabs'] li", "[class*='GoodsDetailTabs'] button", "li[role='tab']", "button[role='tab']"]:
         for el in driver.find_elements(By.CSS_SELECTOR, selector):
             if _try_click(el):
                 clicked = True
@@ -494,660 +642,1027 @@ def _activate_review_tab(driver):
         if clicked:
             break
 
-    # 2순위: XPath (CSS 선택자로 못 찾은 경우에만)
     if not clicked:
         for el in driver.find_elements(By.XPATH, "//*[contains(text(), '리뷰')]"):
             if _try_click(el):
                 break
 
-    # ── 컴포넌트 마운트 폴링 (최대 20초) ─────────────────────────────
-    for i in range(20):
+    for i in range(15):
         time.sleep(1.0)
-        mounted = driver.execute_script(
-            "return !!document.querySelector('oy-review-review-in-product');"
-        )
+        mounted = driver.execute_script("return !!document.querySelector('oy-review-review-in-product');")
         if mounted:
-            print(f"[*] oy-review-review-in-product 마운트 확인 ({i+1}초 경과)")
             return True
-
-    # 마운트 실패 — 진단 정보 출력
-    oy_tags = driver.execute_script("""
-        return [...new Set(
-            Array.from(document.querySelectorAll('*'))
-                .filter(e => e.tagName.toLowerCase().startsWith('oy-'))
-                .map(e => e.tagName.toLowerCase())
-        )].slice(0, 20);
-    """)
-    tabs_found = driver.execute_script("""
-        return Array.from(document.querySelectorAll('*'))
-            .filter(e => {
-                const t = (e.textContent || '').trim();
-                return t.includes('리뷰') && t.length < 30 && e.children.length === 0;
-            })
-            .map(e => ({tag: e.tagName, cls: (e.className||'').substring(0,50),
-                        txt: e.textContent.trim().substring(0,20),
-                        y: e.getBoundingClientRect().top}))
-            .slice(0, 10);
-    """)
-    print(f"[!] 마운트 실패 — oy-* 컴포넌트: {oy_tags}")
-    print(f"[!] '리뷰' 텍스트 요소: {tabs_found}")
     return False
 
-
 def _scroll_to_review_component(driver):
-    """oy-review-review-in-product 컴포넌트가 뷰포트에 들어오도록 스크롤."""
     driver.execute_script("""
         const comp = document.querySelector('oy-review-review-in-product');
         if (comp) comp.scrollIntoView({behavior: 'instant', block: 'start'});
         else window.scrollTo(0, document.body.scrollHeight * 0.4);
     """)
 
+# ==============================================================================
+# [FIX] 정렬 적용 일반화 함수
+# ==============================================================================
+def apply_sort(driver, opt_name, sort_key):
+    """sort_key: 'latest', 'helpful', 'high_rating', 'low_rating'"""
+    sort_label = SORT_TYPES.get(sort_key, sort_key)
+
+    # 현재 정렬 상태 확인
+    current_sort = driver.execute_script(r"""
+        function checkSort(root) {
+            if (!root) return '';
+            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const el of all) {
+                const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                if ((tag === 'oy-review-sort-select' || tag === 'oy-review-review-sort') && el.shadowRoot) {
+                    const label = el.shadowRoot.querySelector('.select-label, [class*="label"], [class*="selected"]');
+                    if (label) return label.textContent.trim();
+                }
+                if (el.shadowRoot) {
+                    const found = checkSort(el.shadowRoot);
+                    if (found) return found;
+                }
+            }
+            return '';
+        }
+        return checkSort(document);
+    """)
+    print(f"[DEBUG_SORT] current_sort='{current_sort}' target='{sort_label}'")
+
+    if sort_label in (current_sort or ''):
+        print(f"[SORT] option_name='{opt_name}' sort_type={sort_key} status=already_applied")
+        return True
+
+    # 정렬 드롭다운 열기 — 여러 가지 시도
+    clicked = False
+    # 1) 현재 정렬 라벨 텍스트로 클릭
+    if current_sort:
+        clicked = driver.execute_script(_JS_CLICK_BY_TEXT, current_sort)
+    # 2) 알려진 정렬 라벨들로 순서대로 시도
+    if not clicked:
+        for try_label in ["추천순", "최신순", "도움순", "유용한순", "평점높은순", "평점낮은순"]:
+            clicked = driver.execute_script(_JS_CLICK_BY_TEXT, try_label)
+            if clicked:
+                break
+    # 3) Shadow DOM 내부 정렬 컴포넌트 직접 클릭
+    if not clicked:
+        clicked = driver.execute_script(r"""
+            function clickSortSelect(root) {
+                if (!root) return false;
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                    if ((tag === 'oy-review-sort-select' || tag === 'oy-review-review-sort') && el.shadowRoot) {
+                        const btn = el.shadowRoot.querySelector('.select-container, button, .select-label, [class*="label"]');
+                        if (btn) { btn.click(); return true; }
+                    }
+                    if (el.shadowRoot) {
+                        if (clickSortSelect(el.shadowRoot)) return true;
+                    }
+                }
+                return false;
+            }
+            return clickSortSelect(document);
+        """)
+
+    time.sleep(1.5)
+
+    selected = driver.execute_script(_JS_CLICK_BY_TEXT, sort_label)
+    if selected:
+        print(f"[SORT] option_name='{opt_name}' sort_type={sort_key} status=applied")
+        wait_for_review_list_update(driver, None)
+        time.sleep(2.0)
+        return True
+    else:
+        print(f"[SKIP] option_name='{opt_name}' sort_type={sort_key} reason=button_not_found")
+        return False
 
 # ==============================================================================
-# 옵션 필터링 기반 크롤링 함수
+# 다음 페이지 이동
 # ==============================================================================
+def click_next_page(driver):
+    clicked = driver.execute_script("""
+        function clickNextPageDeep(root) {
+            if (!root) return false;
+            const pagination = root.querySelector ? root.querySelector('oy-review-pagination') : null;
+            if (pagination && pagination.shadowRoot) {
+                const nextBtn = pagination.shadowRoot.querySelector('button.next, [class*="next"]');
+                if (nextBtn && nextBtn.offsetWidth > 0 && !nextBtn.disabled) {
+                    nextBtn.click();
+                    return true;
+                }
+                const pages = Array.from(pagination.shadowRoot.querySelectorAll('button.page, [class*="page"]'));
+                let activeIdx = -1;
+                for (let i = 0; i < pages.length; i++) {
+                    if (pages[i].classList.contains('active') || pages[i].getAttribute('aria-current') === 'true') {
+                        activeIdx = i;
+                        break;
+                    }
+                }
+                if (activeIdx !== -1 && activeIdx + 1 < pages.length) {
+                    pages[activeIdx + 1].click();
+                    return true;
+                }
+            }
+            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const sub of all) {
+                if (sub.shadowRoot) {
+                    if (clickNextPageDeep(sub.shadowRoot)) return true;
+                }
+            }
+            return false;
+        }
+        return clickNextPageDeep(document);
+    """)
+    return clicked
 
-def crawl_with_options_filtering(driver, goods_no, page_info):
-    """
-    [v5 추가 기능]
-    상품 상세 페이지에서 '상품 옵션' 필터링 버튼을 통해 모달을 호출하고,
-    각 옵션(예: 각 패드 기획 상품)별로 리뷰 페이지를 필터링 조회하여 수집하는 고유 기능.
-    """
+# [ADD] 전역 기존 수집된 리뷰 키 세트
+ALREADY_COLLECTED_KEYS = set()
+TOTAL_COLLECTED_TEMP_COUNT = 0
+
+def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, skin_type, sort_type, args):
+    global ALREADY_COLLECTED_KEYS, TOTAL_COLLECTED_TEMP_COUNT
+    limit_revs = args.limit_reviews
+    max_pages = args.max_pages
+    delay = 1.2
+    
+    collected_reviews = {}
+    # [FIX] __oyBatches 초기화를 여기서 하지 않음 — 옵션 선택/정렬 직후 API 응답이 이미 쌓여 있음
+    
+    for page in range(1, max_pages + 1):
+        # [ADD] 전체 수집량 1500개 목표 도달 시 조기 종료
+        if (len(ALREADY_COLLECTED_KEYS) + TOTAL_COLLECTED_TEMP_COUNT + len(collected_reviews)) >= 1500:
+            print("[*] 목표 수집 수 1500개에 도달하여 조건 내 수집을 중단합니다.")
+            break
+
+        api_reviews, batch_count = collect_api_reviews(driver, goods_no)
+        dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
+        
+        new_count_in_page = 0
+        dup_count_in_page = 0
+        
+        for r in api_reviews + dom_reviews:
+            r['filter_type'] = filter_type
+            r['option_name'] = option_name
+            r['skin_type'] = skin_type
+            r['sort_type'] = sort_type
+            r['review_key'] = build_review_key(r)
+            
+            verify_suspect_keywords(goods_no, r)
+            
+            key = r['review_key']
+            
+            # [ADD] 구글 시트에 이미 존재하는 리뷰면 수집 제외
+            if key in ALREADY_COLLECTED_KEYS:
+                dup_count_in_page += 1
+                continue
+
+            if key not in collected_reviews:
+                collected_reviews[key] = r
+                new_count_in_page += 1
+            else:
+                dup_count_in_page += 1
+                
+        current = len(collected_reviews)
+        print(f"[PAGE] option_name='{option_name}' filter_type={filter_type} page={page} found={new_count_in_page+dup_count_in_page} new_unique={new_count_in_page} duplicated={dup_count_in_page}")
+        
+        # [ADD] 해당 페이지에서 수집한 리뷰 중 신규 고유 리뷰가 하나도 없고 리뷰 목록 자체는 비어있지 않다면,
+        # 이미 과거에 크롤링한 구글 시트 적재 범위에 닿은 것이므로 다음 페이지 이동 중단
+        if new_count_in_page == 0 and len(api_reviews + dom_reviews) > 0:
+            print(f"[PAGE] 신규 수집된 리뷰가 없어 다음 페이지 이동을 중단합니다.")
+            break
+
+        if current >= limit_revs:
+            break
+            
+        has_next = click_next_page(driver)
+        if not has_next:
+            break
+            
+        wait_for_review_list_update(driver, None)
+        time.sleep(delay + random.uniform(0.1, 0.3))
+        
+    # 수집 완료 후 전역 카운터 임시 누적
+    TOTAL_COLLECTED_TEMP_COUNT += len(collected_reviews)
+    return list(collected_reviews.values())
+
+# ==============================================================================
+# [FIX] 묶음 옵션 필터링 기반 크롤링 함수 (대기/폴링 보완)
+# ==============================================================================
+def crawl_with_options_filtering(driver, goods_no, page_info, args):
     url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
     print(f"\n{'='*60}")
-    print(f"[*] [옵션 필터링 적용] 크롤링 시작: [{goods_no}] {page_info['name']}")
+    print(f"[PRODUCT] product_code={goods_no} product_name={page_info['name']}")
     print(f"[*] URL: {url}")
 
     driver.get(url)
     time.sleep(5.5)
 
-    # 인터셉터 주입 (리뷰 탭 클릭 전 — 이후 API 요청 전부 캡처)
+    if check_login_required(driver):
+        print(f"[SKIP] product_code={goods_no} reason=login_required")
+        return []
+
     driver.execute_script(_INTERCEPTOR_JS)
     time.sleep(0.3)
-    print("[*] API 인터셉터 주입 완료.")
-
+    
     _dismiss_popups(driver)
     time.sleep(1.0)
 
     mounted = _activate_review_tab(driver)
     if not mounted:
-        print("[!] 리뷰 컴포넌트 마운트 실패.")
+        print(f"[SKIP] product_code={goods_no} reason=review_tab_mount_failed")
         return []
 
     _scroll_to_review_component(driver)
     time.sleep(2.0)
 
-    # 1. Click "상품 옵션" button inside the shadowRoot of oy-review-filter-chips to open the option list
-    open_success = driver.execute_script("""
-        function findDeep(root, tag) {
-            if (!root) return null;
-            const el = root.querySelector ? root.querySelector(tag) : null;
-            if (el) return el;
-            for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
-                if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
-            }
-            return null;
-        }
-        const comp = document.querySelector('oy-review-review-in-product');
-        if (!comp || !comp.shadowRoot) return false;
-        const chipsComp = findDeep(comp.shadowRoot, 'oy-review-filter-chips');
-        if (!chipsComp || !chipsComp.shadowRoot) return false;
-        const list = Array.from(chipsComp.shadowRoot.querySelectorAll('li'));
-        for (const li of list) {
-            if (li.textContent.trim().includes('상품 옵션')) {
-                const btn = li.querySelector('oy-review-common-button');
-                if (btn && btn.shadowRoot) {
-                    const actualBtn = btn.shadowRoot.querySelector('button');
-                    if (actualBtn) { actualBtn.click(); return true; }
+    # [ADD] 상품 옵션 칩/버튼 로드 완료 대기
+    start_wait = time.time()
+    found_option_btn = False
+    while time.time() - start_wait < 12:
+        exists = driver.execute_script("""
+            function checkExists(root) {
+                if (!root) return false;
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    const txt = el.textContent.replace(/\\s+/g, '');
+                    if (txt.includes("상품옵션") && el.offsetWidth > 0) return true;
                 }
-                li.click();
-                return true;
+                for (const sub of all) {
+                    if (sub.shadowRoot) {
+                        if (checkExists(sub.shadowRoot)) return true;
+                    }
+                }
+                return false;
             }
-        }
-        return false;
-    """)
-    print(f"[*] 상품 옵션 모달 오픈 시도: {open_success}")
-    time.sleep(2.5)
+            return checkExists(document);
+        """)
+        if exists:
+            found_option_btn = True
+            break
+        time.sleep(0.5)
 
-    # 2. Retrieve all options from oy-review-goods-option-sheet shadow DOM
-    options_list = driver.execute_script("""
-        function findDeep(root, tag) {
-            if (!root) return null;
-            const el = root.querySelector ? root.querySelector(tag) : null;
-            if (el) return el;
-            for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
-                if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
-            }
-            return null;
-        }
-        const sheet = findDeep(document, 'oy-review-goods-option-sheet');
-        if (!sheet || !sheet.shadowRoot) return [];
-        const options = Array.from(sheet.shadowRoot.querySelectorAll('li.option'));
-        return options.map((opt, idx) => {
-            const name = opt.querySelector('.option-name').textContent.trim();
-            const count = opt.querySelector('.review-count').textContent.trim();
-            return { index: idx, name: name, count: count };
-        });
-    """)
+    if not found_option_btn:
+        print(f"[SKIP] product_code={goods_no} filter_type=option_modal reason=option_btn_not_loaded")
+        return []
 
-    print(f"[*] 총 {len(options_list)}개의 옵션을 탐지했습니다:")
-    for opt in options_list:
-        print(f"    - [{opt['index']}] {opt['name']} ({opt['count']})")
-
-    all_option_reviews = {}
-
-    for opt_idx, opt in enumerate(options_list):
-        opt_name = opt['name']
-        opt_count_str = opt['count']
-        
-        # Parse count to integer
-        parsed_count = 0
-        m = re.search(r'(\d+)', opt_count_str.replace(',', ''))
-        if m:
-            parsed_count = int(m.group(1))
-        
-        # Determine dynamic target for this option
-        opt_target = min(250, parsed_count)
-        if opt_target == 0:
-            print(f"\n[~] [{opt_idx+1}/{len(options_list)}] {opt_name} -> 리뷰 0건. 건너뜁니다.")
-            continue
-            
-        print(f"\n{'-'*50}")
-        print(f"[+] [{opt_idx+1}/{len(options_list)}] 옵션 필터 선택: {opt_name}")
-        print(f"[+] 해당 옵션 총 리뷰 수: {parsed_count}건, 수집 목표: {opt_target}개")
-
-        # Open options modal if not open
-        is_open = driver.execute_script("""
-            function findDeep(root, tag) {
+    # 1. '상품 옵션' 버튼 클릭하여 모달 열기
+    open_success = driver.execute_script(_JS_CLICK_BY_TEXT, "상품 옵션")
+    if not open_success:
+        print(f"[SKIP] product_code={goods_no} filter_type=option_modal reason=option_btn_click_failed")
+        return []
+    
+    # [ADD] 옵션 모달 및 옵션 목록 렌더링 폴링 대기
+    options_list = None
+    start_wait = time.time()
+    while time.time() - start_wait < 10:
+        options_list = driver.execute_script("""
+            function findDeepOptions(root) {
                 if (!root) return null;
-                const el = root.querySelector ? root.querySelector(tag) : null;
-                if (el) return el;
-                for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
-                    if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+                const sheet = root.querySelector ? root.querySelector('oy-review-goods-option-sheet') : null;
+                if (sheet && sheet.shadowRoot) {
+                    const options = Array.from(sheet.shadowRoot.querySelectorAll('li.option'));
+                    if (options.length > 0) {
+                        return options.map((opt, idx) => {
+                            const nameEl = opt.querySelector('.option-name');
+                            const name = nameEl ? nameEl.textContent.trim() : '';
+                            const countEl = opt.querySelector('.review-count');
+                            const count = countEl ? countEl.textContent.trim() : '';
+                            return { index: idx, name: name, count: count };
+                        });
+                    }
+                }
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const sub of all) {
+                    if (sub.shadowRoot) {
+                        const found = findDeepOptions(sub.shadowRoot);
+                        if (found) return found;
+                    }
                 }
                 return null;
             }
-            const comp = findDeep(document, 'oy-review-bottom-sheet');
-            if (comp && comp.shadowRoot) {
-                const container = comp.shadowRoot.querySelector('.bottom-sheet-container');
-                return container ? container.classList.contains('is-open') : false;
-            }
-            return false;
+            return findDeepOptions(document);
         """)
-        
+        if options_list:
+            break
+        time.sleep(0.5)
+
+    if not options_list:
+        print(f"[SKIP] product_code={goods_no} filter_type=options reason=options_not_found")
+        driver.execute_script(_JS_CLICK_BY_CLASS, ".close-button, [class*='close']")
+        return []
+
+    print(f"[*] 총 {len(options_list)}개의 옵션을 탐지했습니다.")
+    limit_options = 2 if args.limit_reviews <= 20 else len(options_list)
+    options_list = options_list[:limit_options]
+
+    all_collected_reviews = []
+
+    for opt in options_list:
+        opt_idx = opt['index']
+        opt_name = opt['name']
+        print(f"\n[OPTION] option_name='{opt_name}' status=selected")
+
+        is_open = driver.execute_script("""
+            function findDeepSheet(root) {
+                if (!root) return false;
+                const comp = root.querySelector ? root.querySelector('oy-review-bottom-sheet') : null;
+                if (comp && comp.shadowRoot) {
+                    const container = comp.shadowRoot.querySelector('.bottom-sheet-container');
+                    return container ? container.classList.contains('is-open') : false;
+                }
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const sub of all) {
+                    if (sub.shadowRoot) {
+                        const found = findDeepSheet(sub.shadowRoot);
+                        if (found) return found;
+                    }
+                }
+                return false;
+            }
+            return findDeepSheet(document);
+        """)
         if not is_open:
-            print("[*] 옵션 필터 모달이 닫혀 있어 다시 엽니다...")
-            driver.execute_script("""
-                function findDeep(root, tag) {
-                    if (!root) return null;
-                    const el = root.querySelector ? root.querySelector(tag) : null;
-                    if (el) return el;
-                    for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
-                        if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+            driver.execute_script(_JS_CLICK_BY_TEXT, "상품 옵션")
+            time.sleep(2.0)
+
+        # [FIX] 옵션 선택 이전에 배치 초기화 — 옵션 선택/정렬 후 API 응답을 수집하기 위함
+        driver.execute_script("window.__oyBatches = [];")
+
+        # 옵션 하나 선택 후 조회
+        driver.execute_script("""
+            const targetIndex = arguments[0];
+            function selectOptionDeep(root) {
+                if (!root) return false;
+                const sheet = root.querySelector ? root.querySelector('oy-review-goods-option-sheet') : null;
+                if (sheet && sheet.shadowRoot) {
+                    const resetBtn = sheet.shadowRoot.querySelector('.reset-button');
+                    if (resetBtn) resetBtn.click();
+                    
+                    const options = Array.from(sheet.shadowRoot.querySelectorAll('li.option'));
+                    if (options[targetIndex]) {
+                        options[targetIndex].click();
+                    }
+                    
+                    const viewBtn = sheet.shadowRoot.querySelector('.review-button');
+                    if (viewBtn) {
+                        viewBtn.click();
+                        return true;
+                    }
+                }
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const sub of all) {
+                    if (sub.shadowRoot) {
+                        if (selectOptionDeep(sub.shadowRoot)) return true;
+                    }
+                }
+                return false;
+            }
+            return selectOptionDeep(document);
+        """, opt_idx)
+        
+        wait_for_review_list_update(driver, None)
+        time.sleep(2.0)
+
+        if check_login_required(driver):
+            print(f"[SKIP] product_code={goods_no} reason=login_required")
+            break
+
+        # [FIX] 옵션 선택 후 리뷰 영역으로 스크롤 + 정렬 컨트롤 로드 대기
+        _scroll_to_review_component(driver)
+        time.sleep(1.5)
+
+        # [FIX] 정렬별 수집 루프
+        for sort_key, sort_label in SORT_TYPES.items():
+            # 배치 초기화 → 정렬 적용 → 수집
+            driver.execute_script("window.__oyBatches = [];")
+            sort_ok = apply_sort(driver, opt_name, sort_key)
+            if not sort_ok:
+                continue
+
+            filter_type = f"sort_{sort_key}"
+            collected = collect_reviews_for_condition(
+                driver, goods_no, filter_type, opt_name, "None", sort_key, args
+            )
+            all_collected_reviews.extend(collected)
+
+            if check_login_required(driver):
+                print(f"[SKIP] product_code={goods_no} reason=login_required")
+                break
+
+        # [FIX] 피부 타입별 수집 (최신순 고정)
+        # 첫 반복에서만 필터 칩 텍스트 진단
+        if True:
+            chip_texts = driver.execute_script(r"""
+                function findChips(root, depth) {
+                    if (!root || depth > 6) return [];
+                    const texts = [];
+                    const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                    for (const el of all) {
+                        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                        if (tag.includes('filter') || tag.includes('chip')) {
+                            if (el.shadowRoot) {
+                                const inner = Array.from(el.shadowRoot.querySelectorAll('button, span, div, label'));
+                                for (const i of inner) {
+                                    const t = i.textContent.trim();
+                                    if (t && t.length < 30 && i.offsetWidth > 0) texts.push(tag + ': ' + t);
+                                }
+                            }
+                            const t = el.textContent.trim();
+                            if (t && t.length < 30 && el.offsetWidth > 0) texts.push(tag + ': ' + t);
+                        }
+                        if (el.shadowRoot) texts.push(...findChips(el.shadowRoot, depth + 1));
+                    }
+                    return [...new Set(texts)];
+                }
+                return JSON.stringify(findChips(document, 0));
+            """)
+            print(f"[DEBUG_FILTER] 필터 칩 텍스트: {chip_texts}")
+
+        for skin_key in list(SKIN_TYPES.keys()):
+            skin_name = SKIN_TYPES[skin_key]
+            filter_type = f"{skin_key}_sort_latest"
+
+            # 배치 초기화
+            driver.execute_script("window.__oyBatches = [];")
+
+            opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부 필터")
+            if not opened:
+                opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부타입")
+            if not opened:
+                opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부필터")
+            if not opened:
+                opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부 타입")
+            if not opened:
+                print(f"[SKIP] option_name='{opt_name}' skin_type={skin_name} reason=skin_filter_btn_not_found")
+                continue
+            time.sleep(2.0)
+
+            # [ADD] 피부 필터 시트 내부 구조 진단
+            sheet_info = driver.execute_script(r"""
+                function dumpSkinSheet(root, depth) {
+                    if (!root || depth > 6) return [];
+                    const info = [];
+                    const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                    for (const el of all) {
+                        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                        if (el.shadowRoot) {
+                            const sr = el.shadowRoot;
+                            const inner = Array.from(sr.querySelectorAll('*'));
+                            for (const i of inner) {
+                                const itag = i.tagName ? i.tagName.toLowerCase() : '';
+                                const txt = i.textContent.trim().substring(0, 40);
+                                const cls = i.className && typeof i.className === 'string' ? i.className.substring(0, 40) : '';
+                                if (txt && i.offsetWidth > 0 && txt.length < 30) {
+                                    info.push(tag + ' > ' + itag + ' cls=' + cls + ' txt=' + txt);
+                                }
+                            }
+                            info.push(...dumpSkinSheet(sr, depth + 1));
+                        }
+                    }
+                    return info;
+                }
+                return JSON.stringify(dumpSkinSheet(document, 0).slice(0, 50));
+            """)
+            print(f"[DEBUG_SKIN_SHEET] 시트 내부: {sheet_info}")
+
+            # [FIX] 피부 타입 클릭 선택 및 적용 — 실제 DOM 구조 반영
+            selected = driver.execute_script(r"""
+                const targetText = arguments[0];
+                function findSkinSheet(root, depth) {
+                    if (!root || depth > 8) return null;
+                    const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                    for (const el of all) {
+                        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                        if (tag === 'oy-review-skin-fit-sheet' && el.shadowRoot) return el;
+                        if (el.shadowRoot) {
+                            const found = findSkinSheet(el.shadowRoot, depth + 1);
+                            if (found) return found;
+                        }
                     }
                     return null;
                 }
-                const comp = document.querySelector('oy-review-review-in-product');
-                const chipsComp = findDeep(comp.shadowRoot, 'oy-review-filter-chips');
-                const list = Array.from(chipsComp.shadowRoot.querySelectorAll('li'));
-                for (const li of list) {
-                    if (li.textContent.trim().includes('상품 옵션')) {
-                        const btn = li.querySelector('oy-review-common-button');
-                        if (btn && btn.shadowRoot) {
-                            btn.shadowRoot.querySelector('button').click();
-                        } else {
-                            li.click();
+                function findBottomSheet(root, depth) {
+                    if (!root || depth > 8) return null;
+                    const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                    for (const el of all) {
+                        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                        if (tag === 'oy-review-bottom-sheet' && el.shadowRoot) {
+                            const container = el.shadowRoot.querySelector('.bottom-sheet-container.is-open');
+                            if (container) return el;
                         }
+                        if (el.shadowRoot) {
+                            const found = findBottomSheet(el.shadowRoot, depth + 1);
+                            if (found) return found;
+                        }
+                    }
+                    return null;
+                }
+
+                const skinSheet = findSkinSheet(document, 0);
+                if (!skinSheet || !skinSheet.shadowRoot) return false;
+
+                const sr = skinSheet.shadowRoot;
+                const bottomSheet = findBottomSheet(document, 0);
+
+                // [ADD] 초기화 버튼 클릭 시도 (기존 필터 해제)
+                let resetDone = false;
+                const resetBtn = sr.querySelector('.reset-button, [class*="reset"], [class*="clear"]');
+                if (resetBtn) {
+                    resetBtn.click();
+                    resetDone = true;
+                } else if (bottomSheet && bottomSheet.shadowRoot) {
+                    const bsr = bottomSheet.shadowRoot;
+                    const bResetBtn = bsr.querySelector('.reset-button, [class*="reset"], [class*="clear"]');
+                    if (bResetBtn) {
+                        bResetBtn.click();
+                        resetDone = true;
+                    }
+                }
+                if (!resetDone) {
+                    const allCandidates = Array.from(sr.querySelectorAll('button, span, a'));
+                    if (bottomSheet && bottomSheet.shadowRoot) {
+                        allCandidates.push(...Array.from(bottomSheet.shadowRoot.querySelectorAll('button, span, a')));
+                    }
+                    for (const el of allCandidates) {
+                        const txt = el.textContent.trim();
+                        if ((txt === '초기화' || txt === '재설정') && el.offsetWidth > 0) {
+                            el.click();
+                            resetDone = true;
+                            break;
+                        }
+                    }
+                }
+
+                const chips = Array.from(sr.querySelectorAll('button.chip'));
+                let clicked = false;
+                for (const chip of chips) {
+                    if (chip.textContent.trim() === targetText && chip.offsetWidth > 0) {
+                        chip.click();
+                        clicked = true;
                         break;
                     }
                 }
-            """)
+                if (!clicked) return false;
+
+                // 적용 버튼 클릭 — bottom-sheet footer 안의 버튼
+                if (bottomSheet && bottomSheet.shadowRoot) {
+                    const bsr = bottomSheet.shadowRoot;
+                    const applyBtn = bsr.querySelector('.foot button, .footer button, button.apply, button.submit, .review-button');
+                    if (applyBtn) {
+                        applyBtn.click();
+                        return true;
+                    }
+                    // foot 영역의 모든 버튼 중 텍스트에 '리뷰' 또는 '적용' 포함하는 것 클릭
+                    const allBtns = Array.from(bsr.querySelectorAll('button'));
+                    for (const btn of allBtns) {
+                        const t = btn.textContent.trim();
+                        if ((t.includes('리뷰') || t.includes('적용') || t.includes('확인')) && btn.offsetWidth > 0) {
+                            btn.click();
+                            return true;
+                        }
+                    }
+                }
+                return clicked;
+            """, skin_name)
+
+            if not selected:
+                print(f"[SKIP] option_name='{opt_name}' skin_type={skin_name} reason=skin_option_not_found")
+                driver.execute_script(_JS_CLICK_BY_CLASS, ".close-button, [class*='close']")
+                continue
+
+            wait_for_review_list_update(driver, None)
             time.sleep(2.0)
 
-        # Select option in UI
-        driver.execute_script("""
-            const targetIndex = arguments[0];
-            function findDeep(root, tag) {
-                if (!root) return null;
-                const el = root.querySelector ? root.querySelector(tag) : null;
-                if (el) return el;
-                for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
-                    if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
-                }
-                return null;
-            }
-            const sheet = findDeep(document, 'oy-review-goods-option-sheet');
-            
-            // 1. Click reset button first to clear existing selections
-            const resetBtn = sheet.shadowRoot.querySelector('.reset-button');
-            if (resetBtn) resetBtn.click();
-            
-            // 2. Select the option at targetIndex
-            const options = Array.from(sheet.shadowRoot.querySelectorAll('li.option'));
-            if (options[targetIndex]) {
-                options[targetIndex].click();
-            }
-            
-            // 3. Click review-button
-            const viewBtn = sheet.shadowRoot.querySelector('.review-button');
-            if (viewBtn) viewBtn.click();
-        """, opt_idx)
-        
-        time.sleep(2.5)  # Wait for reviews to refresh
-
-        option_reviews = {}
-        
-        # ── 1차 응답 수집: 필터 적용 직후 로드된 리뷰 수집 (특히 리뷰 수가 적은 희소 상품용) ──
-        api_reviews, batch_count = collect_api_reviews(driver, goods_no)
-        dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
-        for r in api_reviews + dom_reviews:
-            key = r.get('review_id') or (r['date'] + '::' + r['content'][:40])
-            option_reviews[key] = r
-
-        # Initialize scroll variables for this option
-        max_scrolls = page_info["max_scroll_steps"]
-        delay = page_info["delay"]
-        MAX_NO_GROWTH = 15  # Slightly shorter for per-option crawl to save time
-        
-        last_count = len(option_reviews)
-        no_growth = 0
-        
-        print(f"[*] [{opt_name}] 옵션 리뷰 스크롤 및 크롤링 시작...")
-
-        for step in range(1, max_scrolls + 1):
-            # ── 1) API 인터셉터에서 새 배치 수집 ──────────────────────
-            api_reviews, batch_count = collect_api_reviews(driver, goods_no)
-            
-            # ── 2) Shadow DOM에서 현재 렌더링된 아이템 추출 ───────────
-            dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
-            
-            # ── 3) 중복 제거 병합 ─────────────────────────────────────
-            for r in api_reviews + dom_reviews:
-                key = r.get('review_id') or (r['date'] + '::' + r['content'][:40])
-                option_reviews[key] = r
-                
-            current = len(option_reviews)
-            growth = current - last_count
-            print(f"  [{step:>4}/{max_scrolls}] 옵션고유: {current:>5}/{opt_target} (+{growth:>3}) API:{batch_count} DOM:{len(dom_reviews)}")
-            
-            if current >= opt_target:
-                print(f"  [+] 옵션 목표 {opt_target}개 달성! 조기 종료.")
+            if check_login_required(driver):
+                print(f"[SKIP] product_code={goods_no} reason=login_required")
                 break
-                
-            if current == last_count:
-                no_growth += 1
-                if no_growth >= MAX_NO_GROWTH:
-                    print(f"  [!] {MAX_NO_GROWTH}회 연속 미증가. 옵션 종료.")
-                    break
-                if no_growth % 5 == 0:
-                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(3.0)
-            else:
-                no_growth = 0
-                
-            last_count = current
-            
-            # scrollIntoView to trigger virtual scroll IntersectionObserver
-            rendered = driver.execute_script(_SCROLL_LAST_ITEM_JS)
-            if rendered == 0:
-                driver.execute_script("window.scrollBy(0, 800);")
-                
-            time.sleep(delay + random.uniform(0.1, 0.3))
-            
-        print(f"[+] [{opt_name}] 최종 {len(option_reviews)}개 고유 리뷰 수집 완료.")
-        all_option_reviews.update(option_reviews)
 
-    print(f"\n{'-' * 60}")
-    print(f"[*] [{goods_no}] 통합 옵션 필터링 완료: 총 {len(all_option_reviews)}개 고유 리뷰 수집됨.")
-    print(f"{'=' * 60}\n")
-    return list(all_option_reviews.values())
+            # 최신순 적용
+            apply_sort(driver, opt_name, "latest")
 
+            collected = collect_reviews_for_condition(
+                driver, goods_no, filter_type, opt_name, skin_name, "latest", args
+            )
+            all_collected_reviews.extend(collected)
+
+        # 상품 옵션 초기화 후 닫기
+        driver.execute_script(_JS_CLICK_BY_TEXT, "상품 옵션")
+        time.sleep(2.0)
+        driver.execute_script("""
+            function resetOptionDeep(root) {
+                if (!root) return false;
+                const sheet = root.querySelector ? root.querySelector('oy-review-goods-option-sheet') : null;
+                if (sheet && sheet.shadowRoot) {
+                    const resetBtn = sheet.shadowRoot.querySelector('.reset-button');
+                    if (resetBtn) resetBtn.click();
+                    const viewBtn = sheet.shadowRoot.querySelector('.review-button');
+                    if (viewBtn) { viewBtn.click(); return true; }
+                }
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const sub of all) {
+                    if (sub.shadowRoot) {
+                        if (resetOptionDeep(sub.shadowRoot)) return true;
+                    }
+                }
+                return false;
+            }
+            resetOptionDeep(document);
+        """)
+        wait_for_review_list_update(driver, None)
+        time.sleep(2.0)
+
+    return all_collected_reviews
 
 # ==============================================================================
-# 메인 크롤링 함수
+# 단품 상품 수집
 # ==============================================================================
-
-def crawl_raw_reviews_from_page(driver, goods_no, page_info):
-    """
-    [v4 변경 사항]
-    1. XHR + fetch 인터셉터 → /review/api/v2/reviews/cursor 응답 JSON 직접 수집
-       (가상 스크롤 DOM에 7개만 렌더링되는 문제 우회)
-    2. Shadow DOM 추출 병행 (인터셉터 파싱 실패 시 보완)
-    3. scrollBy 대신 마지막 oy-review-review-item.scrollIntoView 사용
-       → 가상 스크롤 IntersectionObserver 정확히 트리거
-    """
+def crawl_raw_reviews_from_page(driver, goods_no, page_info, args):
     if goods_no in ["A000000166709", "A000000206889"]:
-        return crawl_with_options_filtering(driver, goods_no, page_info)
+        return crawl_with_options_filtering(driver, goods_no, page_info, args)
 
     url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
     print(f"\n{'='*60}")
-    print(f"[*] 크롤링 시작: [{goods_no}] {page_info['name']}")
+    print(f"[PRODUCT] product_code={goods_no} product_name={page_info['name']}")
     print(f"[*] URL: {url}")
-    print(f"[*] 목표: {page_info['target_reviews']}개, 최대 스크롤: {page_info['max_scroll_steps']}회")
 
     driver.get(url)
     time.sleep(5.5)
 
-    # 인터셉터 주입 (리뷰 탭 클릭 전 — 이후 API 요청 전부 캡처)
+    if check_login_required(driver):
+        print(f"[SKIP] product_code={goods_no} reason=login_required")
+        return []
+
     driver.execute_script(_INTERCEPTOR_JS)
     time.sleep(0.3)
-    print("[*] API 인터셉터 주입 완료.")
-
+    
     _dismiss_popups(driver)
     time.sleep(1.0)
 
-    _activate_review_tab(driver)
-    # _activate_review_tab이 내부에서 마운트 폴링으로 대기하므로 별도 sleep 최소화
-    time.sleep(2.0)  # 1차 API 응답 수신 여유 시간
+    mounted = _activate_review_tab(driver)
+    if not mounted:
+        print(f"[SKIP] product_code={goods_no} reason=review_tab_mount_failed")
+        return []
 
     _scroll_to_review_component(driver)
     time.sleep(2.0)
 
-    # 초기 스크롤: 리뷰 아이템이 뷰포트에 진입하도록 먼저 내려감
-    print("[*] 초기 스크롤 (5×700px) — virtual scroll 렌더링 대기...")
-    for _ in range(5):
-        driver.execute_script("window.scrollBy(0, 700);")
-        time.sleep(1.2)
-    time.sleep(2.0)
-
-    # ── 최초 Shadow DOM 상태 진단 ────────────────────────────────
-    diag = driver.execute_script("""
-        function findDeep(root, tag) {
-            if (!root) return null;
-            const el = root.querySelector ? root.querySelector(tag) : null;
-            if (el) return el;
-            for (const e of (root.querySelectorAll ? Array.from(root.querySelectorAll('*')) : [])) {
-                if (e.shadowRoot) { const r = findDeep(e.shadowRoot, tag); if (r) return r; }
+    # 1. '피부필터' 칩 로드 완료 대기
+    start_wait = time.time()
+    found_skin_btn = False
+    while time.time() - start_wait < 12:
+        exists = driver.execute_script("""
+            function checkExists(root) {
+                if (!root) return false;
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    const txt = el.textContent.replace(/\\s+/g, '');
+                    if (txt.includes("피부필터") && el.offsetWidth > 0) return true;
+                }
+                for (const sub of all) {
+                    if (sub.shadowRoot) {
+                        if (checkExists(sub.shadowRoot)) return true;
+                    }
+                }
+                return false;
             }
-            return null;
-        }
-        const comp = document.querySelector('oy-review-review-in-product');
-        if (!comp) return {step: 'no-comp'};
-        if (!comp.shadowRoot) return {step: 'no-comp-shadow'};
-        const list = findDeep(comp.shadowRoot, 'oy-review-review-list');
-        if (!list) return {step: 'no-list', compHTML: comp.shadowRoot.innerHTML.substring(0, 300)};
-        if (!list.shadowRoot) return {step: 'no-list-shadow'};
-        const items = Array.from(list.shadowRoot.querySelectorAll('oy-review-review-item'));
-        const allTags = [...new Set(Array.from(list.shadowRoot.querySelectorAll('*'))
-            .map(e => e.tagName.toLowerCase()))].slice(0, 20);
-        return {step: 'ok', itemCount: items.length, allTags,
-                listHTML: list.shadowRoot.innerHTML.substring(0, 400)};
-    """)
-    print(f"[*] Shadow DOM 초기 진단: {json.dumps(diag, ensure_ascii=False)}")
+            return checkExists(document);
+        """)
+        if exists:
+            found_skin_btn = True
+            break
+        time.sleep(0.5)
 
-    target        = page_info["target_reviews"]
-    max_scrolls   = page_info["max_scroll_steps"]
-    delay         = page_info["delay"]
-    MAX_NO_GROWTH = 30
+    if not found_skin_btn:
+        print(f"[SKIP] product_code={goods_no} filter_type=skin_filter reason=button_not_found")
+        return []
 
-    raw_reviews   = {}
-    last_count    = 0
-    no_growth     = 0
+    all_collected_reviews = []
+    opt_name = "단품"
 
-    for step in range(1, max_scrolls + 1):
-        # ── 1) API 인터셉터에서 새 배치 수집 ──────────────────────
-        api_reviews, batch_count = collect_api_reviews(driver, goods_no)
+    # [FIX] 정렬별 수집 루프
+    for sort_key, sort_label in SORT_TYPES.items():
+        driver.execute_script("window.__oyBatches = [];")
+        sort_ok = apply_sort(driver, opt_name, sort_key)
+        if not sort_ok:
+            continue
 
-        # ── 2) Shadow DOM에서 현재 렌더링된 아이템 추출 ───────────
-        dom_reviews = extract_reviews_from_shadow_dom(driver, goods_no)
+        filter_type = f"sort_{sort_key}"
+        collected = collect_reviews_for_condition(
+            driver, goods_no, filter_type, opt_name, "None", sort_key, args
+        )
+        all_collected_reviews.extend(collected)
 
-        # ── 3) 중복 제거 병합 ─────────────────────────────────────
-        for r in api_reviews + dom_reviews:
-            # review_id가 있으면 그걸로, 없으면 날짜+내용 앞글자로 키 생성
-            key = r.get('review_id') or (r['date'] + '::' + r['content'][:40])
-            raw_reviews[key] = r
-
-        current = len(raw_reviews)
-        growth  = current - last_count
-        print(f"  [{step:>4}/{max_scrolls}] 고유: {current:>5}/{target}"
-              f"  (+{growth:>3})  API배치:{batch_count}({len(api_reviews)}건)  DOM:{len(dom_reviews)}개")
-
-        if current >= target:
-            print(f"  [+] 목표 {target}개 달성! 조기 종료.")
+        if check_login_required(driver):
+            print(f"[SKIP] product_code={goods_no} reason=login_required")
             break
 
-        if current == last_count:
-            no_growth += 1
-            if no_growth >= MAX_NO_GROWTH:
-                print(f"  [!] {MAX_NO_GROWTH}회 연속 미증가. 종료.")
-                break
-            if no_growth % 10 == 0:
-                # 리뷰 컴포넌트 상단으로 돌아간 뒤 다시 내려가기
-                _scroll_to_review_component(driver)
-                time.sleep(2.0)
-                print(f"  [~] no_growth={no_growth}: 컴포넌트 상단으로 재위치")
-            elif no_growth % 5 == 0:
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                print(f"  [~] no_growth={no_growth}: scrollTo(bottom) 강제 실행")
-                time.sleep(4.0)
-                continue
-        else:
-            no_growth = 0
+    # [FIX] 피부 타입별 수집 (최신순 고정)
+    for skin_key in list(SKIN_TYPES.keys()):
+        skin_name = SKIN_TYPES[skin_key]
+        filter_type = f"{skin_key}_sort_latest"
 
-        last_count = current
+        driver.execute_script("window.__oyBatches = [];")
 
-        # ── 마지막 렌더링 아이템 scrollIntoView → 가상 스크롤 트리거 ──
-        rendered = driver.execute_script(_SCROLL_LAST_ITEM_JS)
-        if rendered == 0:
-            # 아이템 없음 — 단순 scrollBy 폴백
-            driver.execute_script("window.scrollBy(0, 800);")
+        opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부 필터")
+        if not opened:
+            opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부타입")
+        if not opened:
+            opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부필터")
+        if not opened:
+            opened = driver.execute_script(_JS_CLICK_BY_TEXT, "피부 타입")
+        if not opened:
+            print(f"[SKIP] option_name='{opt_name}' skin_type={skin_name} reason=skin_filter_btn_not_found")
+            continue
+        time.sleep(2.0)
 
-        time.sleep(delay + random.uniform(0.2, 0.5))
+        # [FIX] 피부 타입 클릭 선택 및 적용 — 실제 DOM 구조 반영
+        selected = driver.execute_script(r"""
+            const targetText = arguments[0];
+            function findSkinSheet(root, depth) {
+                if (!root || depth > 8) return null;
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                    if (tag === 'oy-review-skin-fit-sheet' && el.shadowRoot) return el;
+                    if (el.shadowRoot) {
+                        const found = findSkinSheet(el.shadowRoot, depth + 1);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+            function findBottomSheet(root, depth) {
+                if (!root || depth > 8) return null;
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+                    if (tag === 'oy-review-bottom-sheet' && el.shadowRoot) {
+                        const container = el.shadowRoot.querySelector('.bottom-sheet-container.is-open');
+                        if (container) return el;
+                    }
+                    if (el.shadowRoot) {
+                        const found = findBottomSheet(el.shadowRoot, depth + 1);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
 
-    print(f"[*] [{goods_no}] 최종 {len(raw_reviews)}개 고유 리뷰 수집 완료.")
-    return list(raw_reviews.values())
+            const skinSheet = findSkinSheet(document, 0);
+            if (!skinSheet || !skinSheet.shadowRoot) return false;
 
+            const sr = skinSheet.shadowRoot;
+            const bottomSheet = findBottomSheet(document, 0);
 
-# ==============================================================================
-# 리뷰 분류
-# ==============================================================================
+            // [ADD] 초기화 버튼 클릭 시도 (기존 필터 해제)
+            let resetDone = false;
+            const resetBtn = sr.querySelector('.reset-button, [class*="reset"], [class*="clear"]');
+            if (resetBtn) {
+                resetBtn.click();
+                resetDone = true;
+            } else if (bottomSheet && bottomSheet.shadowRoot) {
+                const bsr = bottomSheet.shadowRoot;
+                const bResetBtn = bsr.querySelector('.reset-button, [class*="reset"], [class*="clear"]');
+                if (bResetBtn) {
+                    bResetBtn.click();
+                    resetDone = true;
+                }
+            }
+            if (!resetDone) {
+                const allCandidates = Array.from(sr.querySelectorAll('button, span, a'));
+                if (bottomSheet && bottomSheet.shadowRoot) {
+                    allCandidates.push(...Array.from(bottomSheet.shadowRoot.querySelectorAll('button, span, a')));
+                }
+                for (const el of allCandidates) {
+                    const txt = el.textContent.trim();
+                    if ((txt === '초기화' || txt === '재설정') && el.offsetWidth > 0) {
+                        el.click();
+                        resetDone = true;
+                        break;
+                    }
+                }
+            }
 
-def map_reviews_to_target_pads(all_raw_reviews):
-    print("\n" + "="*60)
-    print("[*] 11종 패드로 리뷰 분류 시작...")
+            const chips = Array.from(sr.querySelectorAll('button.chip'));
+            let clicked = false;
+            for (const chip of chips) {
+                if (chip.textContent.trim() === targetText && chip.offsetWidth > 0) {
+                    chip.click();
+                    clicked = true;
+                    break;
+                }
+            }
+            if (!clicked) return false;
 
-    categorized = {name: [] for name in TARGET_PADS}
-    unmapped    = 0
+            // 적용 버튼 클릭 — bottom-sheet footer 안의 버튼
+            if (bottomSheet && bottomSheet.shadowRoot) {
+                const bsr = bottomSheet.shadowRoot;
+                const applyBtn = bsr.querySelector('.foot button, .footer button, button.apply, button.submit, .review-button');
+                if (applyBtn) {
+                    applyBtn.click();
+                    return true;
+                }
+                // foot 영역의 모든 버튼 중 텍스트에 '리뷰' 또는 '적용' 포함하는 것 클릭
+                const allBtns = Array.from(bsr.querySelectorAll('button'));
+                for (const btn of allBtns) {
+                    const t = btn.textContent.trim();
+                    if ((t.includes('리뷰') || t.includes('적용') || t.includes('확인')) && btn.offsetWidth > 0) {
+                        btn.click();
+                        return true;
+                    }
+                }
+            }
+            return clicked;
+        """, skin_name)
 
-    for r in all_raw_reviews:
-        mapped = False
-        opt    = (r['option_name'] or "").lower()
-        gno    = r['goods_no']
+        if not selected:
+            print(f"[SKIP] option_name='{opt_name}' skin_type={skin_name} reason=skin_option_not_found")
+            driver.execute_script(_JS_CLICK_BY_CLASS, ".close-button, [class*='close']")
+            continue
 
-        for pad, info in TARGET_PADS.items():
-            for kw in info["keywords"]:
-                if kw in opt:
-                    categorized[pad].append(r)
-                    mapped = True
-                    break
-            if mapped:
-                break
+        wait_for_review_list_update(driver, None)
+        time.sleep(2.0)
 
-        if not mapped:
-            for pad, info in TARGET_PADS.items():
-                if gno == info["default_goods"]:
-                    categorized[pad].append(r)
-                    mapped = True
-                    break
-
-        if not mapped:
-            unmapped += 1
-
-    print("[*] 분류 결과:")
-    for pad, revs in categorized.items():
-        print(f"    - {pad}: {len(revs)}개")
-    print(f"    - 미분류: {unmapped}개")
-    return categorized
-
-
-# ==============================================================================
-# 균등 평점 샘플링
-# ==============================================================================
-
-def balance_reviews(pad_name, reviews, target_total=185):
-    print(f"\n[*] [{pad_name}] 평점 균등 샘플링...")
-
-    by_rating   = {r: [] for r in range(1, 6)}
-    for rev in reviews:
-        s = rev["rating"]
-        if s in by_rating:
-            by_rating[s].append(rev)
-
-    available   = {r: len(by_rating[r]) for r in range(1, 6)}
-    total_avail = sum(available.values())
-    if total_avail <= target_total:
-        print(f"    [!] 가용({total_avail}) ≤ 목표({target_total}). 전체 반환.")
-        return reviews
-
-    allocated = {r: 0 for r in range(1, 6)}
-    remaining = target_total
-    active    = list(range(1, 6))
-
-    while remaining > 0 and active:
-        share      = max(remaining // len(active), 1)
-        next_active = []
-        for r in active:
-            avail = available[r] - allocated[r]
-            give  = min(avail, share)
-            allocated[r] += give
-            remaining    -= give
-            if avail > share:
-                next_active.append(r)
-        if len(next_active) == len(active) and remaining > 0:
-            for r in sorted(next_active, key=lambda x: available[x]-allocated[x], reverse=True):
-                if remaining > 0 and (available[r]-allocated[r]) > 0:
-                    allocated[r] += 1
-                    remaining    -= 1
+        if check_login_required(driver):
+            print(f"[SKIP] product_code={goods_no} reason=login_required")
             break
-        active = next_active
 
-    selected = []
-    for r in range(1, 6):
-        pool = by_rating[r][:]
-        random.shuffle(pool)
-        selected.extend(pool[:allocated[r]])
-        print(f"    - {r}점: {available[r]}개 중 {allocated[r]}개 선택")
+        apply_sort(driver, opt_name, "latest")
 
-    print(f"    → 선정 완료: {len(selected)}개")
-    return selected
+        collected = collect_reviews_for_condition(
+            driver, goods_no, filter_type, opt_name, skin_name, "latest", args
+        )
+        all_collected_reviews.extend(collected)
 
+    return all_collected_reviews
 
 # ==============================================================================
-# 엑셀 저장
+# Google Sheets
 # ==============================================================================
-
-def save_to_premium_excel(final_reviews_dict):
-    print(f"\n[*] 엑셀 저장 준비... ({OUTPUT_FILENAME})")
-
-    # 기존에 파일이 이미 저장되어 있다면, 저장된 데이터를 삭제
-    if os.path.exists(OUTPUT_FILENAME):
-        try:
-            os.remove(OUTPUT_FILENAME)
-            print(f"[*] 기존의 '{OUTPUT_FILENAME}' 파일 및 데이터를 성공적으로 삭제했습니다. 새로운 데이터로 갱신합니다.")
-        except Exception as e:
-            print(f"[!] 기존 파일 삭제 중 오류 발생 (파일이 열려있을 수 있습니다): {e}")
-
-    rows = []
-    for pad_name, revs in final_reviews_dict.items():
-        for r in revs:
-            rows.append({
-                "타겟상품명":        pad_name,
-                "올리브영 상품코드": r["goods_no"],
-                "구매 옵션명":       r["option_name"] or "단품",
-                "작성자":            r["username"],
-                "피부타입":          r["skin_types"],
-                "별점":              f"{r['rating']}점",
-                "작성일":            r["date"],
-                "리뷰 내용":         r["content"],
-            })
-
-    df = pd.DataFrame(rows)
-    if df.empty:
-        print("[!] 저장할 데이터 없음.")
-        return
-
-    cols = ["타겟상품명", "올리브영 상품코드", "구매 옵션명", "작성자", "피부타입", "별점", "작성일", "리뷰 내용"]
-    df   = df[cols]
-
+def get_google_sheet_client():
+    cred_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+    if not cred_file:
+        print("[ERROR] GOOGLE_SERVICE_ACCOUNT_FILE 환경변수가 설정되지 않았습니다.")
+        return None
     try:
-        with pd.ExcelWriter(OUTPUT_FILENAME, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='스킨푸드 패드 리뷰')
-            ws  = writer.sheets['스킨푸드 패드 리뷰']
-
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-            hdr_fill  = PatternFill(start_color="33691E", end_color="33691E", fill_type="solid")
-            hdr_font  = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
-            body_font = Font(name="Malgun Gothic", size=10)
-            thin      = Border(**{s: Side(style='thin', color='EAEAEA')
-                                   for s in ('left', 'right', 'top', 'bottom')})
-
-            for col in range(1, len(cols) + 1):
-                c = ws.cell(row=1, column=col)
-                c.fill = hdr_fill; c.font = hdr_font; c.border = thin
-                c.alignment = Alignment(horizontal="center", vertical="center")
-
-            for row in range(2, len(df) + 2):
-                for col in range(1, len(cols) + 1):
-                    c = ws.cell(row=row, column=col)
-                    c.font = body_font; c.border = thin
-                    if col in (1, 2, 4, 6, 7):
-                        c.alignment = Alignment(horizontal="center", vertical="center")
-                    elif col == 8:
-                        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-                    else:
-                        c.alignment = Alignment(horizontal="left", vertical="center")
-
-            ws.row_dimensions[1].height = 32
-            for r in range(2, len(df) + 2):
-                ws.row_dimensions[r].height = 25
-
-            for col in ws.columns:
-                letter  = col[0].column_letter
-                max_len = max(
-                    ((len((v := str(c.value or '')).encode('utf-8')) + len(v)) // 2)
-                    for c in col
-                )
-                ws.column_dimensions[letter].width = min(max(max_len + 4, 12), 70)
-
-        print(f"\n[+] 저장 완료: {os.path.abspath(OUTPUT_FILENAME)}")
-        print(f"[+] 총 {len(df)}개 행 저장됨.")
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_file(cred_file, scopes=scope)
+        return gspread.authorize(creds)
     except Exception as e:
-        print(f"[!] 엑셀 저장 오류: {e}")
+        print(f"[ERROR] Google Sheets 인증 실패: {e}")
+        return None
 
+def get_reviews_worksheet(client):
+    sheet_id = os.getenv("GOOGLE_SHEET_ID")
+    sheet_name = os.getenv("GOOGLE_WORKSHEET_NAME", "Sheet1")
+    if not sheet_id:
+        print("[ERROR] GOOGLE_SHEET_ID 환경변수가 설정되지 않았습니다.")
+        return None
+    try:
+        spreadsheet = client.open_by_key(sheet_id)
+        try:
+            return spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            return spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="20")
+    except Exception as e:
+        print(f"[ERROR] 워크시트 로드 실패: {e}")
+        return None
+
+def load_existing_reviews_from_google_sheet(worksheet):
+    try:
+        records = worksheet.get_all_records()
+        if not records:
+            return pd.DataFrame()
+        df = pd.DataFrame(records)
+        print(f"[SHEET] 기존 시트 데이터 로드 성공: {len(df)}행")
+        return df
+    except Exception as e:
+        print(f"[SHEET] 기존 시트 데이터를 읽을 수 없거나 시트가 비어있습니다: {e}")
+        return pd.DataFrame()
+
+def upload_dataframe_to_google_sheet(df, worksheet):
+    if df.empty:
+        print("[SHEET] 빈 데이터프레임입니다. 업로드를 건너뜁니다.")
+        return
+    try:
+        worksheet.clear()
+        headers = df.columns.tolist()
+        df_filled = df.fillna("")
+        data_rows = df_filled.values.tolist()
+        worksheet.update([headers] + data_rows)
+        print(f"[SHEET] worksheet={worksheet.title} rows_written={len(df_filled) + 1}")
+    except Exception as e:
+        print(f"[ERROR] Google Sheets 업로드 오류: {e}")
 
 # ==============================================================================
-# 진입점
+# Entry Point
 # ==============================================================================
+def parse_args():
+    parser = argparse.ArgumentParser(description="올리브영 11종 패드 리뷰 수집기")
+    parser.add_argument("--limit-products", type=int, default=None, help="크롤링할 상품 개수 제한")
+    # [FIX] 1500개 목표 수집을 위해 조건당 리뷰 수 기본값 200, 최대 페이지 20으로 상향
+    parser.add_argument("--limit-reviews", type=int, default=200, help="조건당 수집할 최대 리뷰 수")
+    parser.add_argument("--max-pages", type=int, default=20, help="조건당 최대 페이지 수")
+    parser.add_argument("--headless", type=str, default="True", help="Headless 모드 사용 여부 (True/False)")
+    parser.add_argument("--skip-google-sheets", action="store_true", help="Google Sheets 업로드 생략")
+    parser.add_argument("--dry-run", action="store_true", help="드라이 런 모드")
+    return parser.parse_args()
 
 def main():
+    global ALREADY_COLLECTED_KEYS, TOTAL_COLLECTED_TEMP_COUNT
+    args = parse_args()
     print("="*60)
-    print("  올리브영 스킨푸드 11종 패드 균등 평점 리뷰 수집기 v4")
-    print("  방식: API 인터셉터 + Shadow DOM 추출 + 가상 스크롤 트리거")
+    print("  올리브영 스킨푸드 11종 패드 균등 평점 리뷰 수집기")
+    print("  방식: API 인터셉터 + Shadow DOM 추출 + 묶음 상품 정렬/필터 루프")
     print("="*60)
 
-    driver = init_driver()
+    # [ADD] 구글 시트 연동 시 기존 적재 데이터 불러오기 (이어쓰기/중복제거 기반 마련)
+    existing_df = pd.DataFrame()
+    worksheet = None
+    if not args.skip_google_sheets and not args.dry_run:
+        client = get_google_sheet_client()
+        if client:
+            worksheet = get_reviews_worksheet(client)
+            if worksheet:
+                existing_df = load_existing_reviews_from_google_sheet(worksheet)
+                if not existing_df.empty and "review_key" in existing_df.columns:
+                    ALREADY_COLLECTED_KEYS = set(existing_df["review_key"].dropna().astype(str).tolist())
+                    print(f"[*] 구글 시트에서 기존 수집된 고유 리뷰 {len(ALREADY_COLLECTED_KEYS)}개를 불러왔습니다.")
+
+    driver = init_driver(args)
     all_reviews = []
+    TOTAL_COLLECTED_TEMP_COUNT = 0
 
     try:
-        for idx, (goods_no, page_info) in enumerate(PRODUCT_PAGES.items()):
-            print(f"\n[페이지 {idx+1}/{len(PRODUCT_PAGES)}]")
-            page_reviews = crawl_raw_reviews_from_page(driver, goods_no, page_info)
-            all_reviews.extend(page_reviews)
+        product_list = list(PRODUCT_PAGES.items())
+        if args.limit_products:
+            product_list = product_list[:args.limit_products]
 
-            if idx < len(PRODUCT_PAGES) - 1:
+        total_goal = 1500
+        for idx, (goods_no, page_info) in enumerate(product_list):
+            current_total = len(ALREADY_COLLECTED_KEYS) + TOTAL_COLLECTED_TEMP_COUNT
+            if current_total >= total_goal:
+                print(f"\n[*] 기존 수집 데이터 + 신규 수집 데이터 총합이 {total_goal}개 목표를 달성하여 크롤링을 최종 종료합니다.")
+                break
+
+            print(f"\n[PRODUCT] index={idx+1}/{len(product_list)} product_code={goods_no} product_name={page_info['name']}")
+            try:
+                page_reviews = crawl_raw_reviews_from_page(driver, goods_no, page_info, args)
+                all_reviews.extend(page_reviews)
+                print(f"[PRODUCT_DONE] product_code={goods_no} unique_saved={len(page_reviews)}")
+            except Exception as e:
+                print(f"[ERROR] product_code={goods_no} filter_type=all type=crawl_error reason={e}")
+
+            if idx < len(product_list) - 1:
                 print("[*] 다음 페이지 이동 전 4초 쿨다운...")
                 time.sleep(4)
     finally:
         print("\n[*] Selenium 드라이버 종료.")
         driver.quit()
 
-    categorized = map_reviews_to_target_pads(all_reviews)
+    rows = []
+    for r in all_reviews:
+        rows.append({
+            "goods_no":     r["goods_no"],
+            "option_name":  r["option_name"] or "단품",
+            "username":     r["username"],
+            "skin_types":   r["skin_types"],
+            "rating":       r["rating"],
+            "date":         r["date"],
+            "content":      r["content"],
+            "filter_type":  r.get("filter_type", "sort_latest"),
+            "review_key":   r.get("review_key", ""),
+            "skin_type":    r.get("skin_type", "None"),
+            "sort_type":    r.get("sort_type", "latest")
+        })
 
-    final = {}
-    for pad, pool in categorized.items():
-        final[pad] = balance_reviews(pad, pool, target_total=185)
+    new_df = pd.DataFrame(rows)
+    
+    # [ADD] 기존 데이터와 신규 데이터 병합 후 중복 제거 저장
+    final_df = pd.DataFrame()
+    if not existing_df.empty:
+        if not new_df.empty:
+            final_df = pd.concat([existing_df, new_df], ignore_index=True)
+        else:
+            final_df = existing_df
+    else:
+        final_df = new_df
 
-    save_to_premium_excel(final)
+    if not final_df.empty:
+        final_df = final_df.drop_duplicates(subset=["review_key"], keep="first")
+        print(f"\n[*] 중복 제거 후 최종적으로 {len(final_df)}개 고유 리뷰가 데이터셋에 존재합니다.")
+        
+        if not args.skip_google_sheets and not args.dry_run:
+            if worksheet:
+                upload_dataframe_to_google_sheet(final_df, worksheet)
+            else:
+                print("[!] 구글 시트 워크시트를 찾지 못해 업로드를 건너뜁니다.")
+        else:
+            print("[*] Google Sheets 업로드 모드가 비활성화되어 로컬에 캐시합니다 (메모리만 유지).")
+    else:
+        print("[!] 수집된 리뷰가 전혀 없습니다.")
 
     print("\n" + "="*60)
     print("  모든 작업 완료!")
