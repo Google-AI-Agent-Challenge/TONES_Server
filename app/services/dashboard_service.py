@@ -1160,6 +1160,8 @@ class DashboardService:
             "피부 고민", "자극성", "피부진정", "저자극", "보습", "재구매", "산뜻", "피부결 만족",
             "효과", "효능", "피부 개선", "피부 변화", "각질", "피부톤", "미백", "수분감", "모공",
             "피부 진정", "트러블케어", "진정효과", "보습력", "리뷰",
+            # 전반적 만족·불만족 시그널 — 성분·피부 진정 효과와 가장 연관됨
+            "만족", "추천", "개선", "실망", "별로",
         ],
         "formulation": [
             "제형", "흡수", "끈적", "발림", "촉촉", "수분", "밀림", "밀려", "발리", "보풀",
@@ -1176,12 +1178,20 @@ class DashboardService:
     _NEGATIVE_SIGNAL_KWS = [
         "자극", "트러블", "여드름", "붉", "불편", "끈적", "밀림", "밀려", "보풀", "찢",
         "뚜껑 불편", "집게 불편", "따가", "뒤집", "파손", "누액", "새는", "불량",
+        "실망", "별로",
     ]
 
     def _categorize_keyword(self, keyword: str) -> str:
+        """
+        trending keyword가 어느 카테고리에 속하는지 반환.
+        양방향 부분 문자열 검사:
+          - 순방향: map 항목이 trending keyword 안에 포함 (예: "자극" ∈ "저자극")
+          - 역방향: trending keyword가 map 항목 안에 포함 (예: "만족" ∈ "피부결 만족")
+        둘 다 매칭되지 않으면 "unknown" 반환.
+        """
         for category, kws in self._CATEGORY_KEYWORD_MAP.items():
             for kw in kws:
-                if kw in keyword:
+                if kw in keyword or keyword in kw:
                     return category
         return "unknown"
 
@@ -1194,6 +1204,12 @@ class DashboardService:
                 return f"'{k}'({keyword_counts[k]}회)"
             return f"'{k}'"
 
+        def _fmt_change(c: float) -> str:
+            """change == 0이면 수치 대신 문구, 아니면 +/-X.X%p 형태로 반환."""
+            if c == 0.0:
+                return "큰 변화 없음"
+            return f"{c:+.1f}%p"
+
         category_label = {"ingredients": "성분·피부 진정", "formulation": "제형·발림성", "container": "용기·편의성"}.get(category, category)
 
         if not related_keywords:
@@ -1202,7 +1218,7 @@ class DashboardService:
             elif change < 0:
                 return f"{category_label} 관련 만족도가 전기 대비 {change:+.1f}%p 하락하였습니다."
             else:
-                return f"{category_label} 관련 만족도는 전기와 동일한 수준을 유지하고 있습니다."
+                return f"{category_label} 관련 만족도는 전기 대비 큰 변화가 없었습니다."
 
         neg_kws = [k for k in related_keywords if self._is_negative_keyword(k)]
         pos_kws = [k for k in related_keywords if not self._is_negative_keyword(k)]
@@ -1212,7 +1228,8 @@ class DashboardService:
             return f"급상승 키워드 {neg_str}가 {category_label} 관련 불만 반응과 연관됩니다. 만족도 {change:+.1f}%p 하락했습니다."
         elif neg_kws and change >= 0:
             neg_str = ", ".join(_fmt_kw(k) for k in neg_kws)
-            return f"급상승 키워드 {neg_str} 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. (만족도 {change:+.1f}%p)"
+            change_str = _fmt_change(change)
+            return f"급상승 키워드 {neg_str} 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. ({change_str})"
         elif pos_kws and change > 0:
             pos_str = ", ".join(_fmt_kw(k) for k in pos_kws)
             return f"급상승 키워드 {pos_str}가 {category_label} 만족도 개선을 뒷받침합니다. (만족도 {change:+.1f}%p)"
@@ -1221,7 +1238,8 @@ class DashboardService:
             return f"급상승 키워드 {pos_str} 언급이 있었으나 {category_label} 전반적 만족도는 하락했습니다. 세부 리뷰 확인을 권장합니다. (만족도 {change:+.1f}%p)"
         else:
             kw_str = ", ".join(_fmt_kw(k) for k in related_keywords)
-            return f"급상승 키워드 {kw_str}가 {category_label} 관련 이슈와 연관됩니다. (만족도 {change:+.1f}%p)"
+            change_str = _fmt_change(change)
+            return f"급상승 키워드 {kw_str}가 {category_label} 관련 이슈와 연관됩니다. ({change_str})"
 
     def fetch_insights(self, product_id: Optional[str], period_days: int) -> dict:
         """
@@ -1298,18 +1316,28 @@ class DashboardService:
             score = round(this_score * 100, 1)
             change = round((this_score - last_score) * 100, 1)
             related_strs = category_keywords.get(category, [])
-            # 프론트엔드에서 언급 횟수까지 바로 표시할 수 있도록 {keyword, count} 구조로 전달
+
+            # 이 카테고리에 속하는 키워드만 ({keyword, count} 구조)
             related = [
                 {"keyword": kw, "count": keyword_counts.get(kw, 0)}
                 for kw in related_strs
             ]
 
-            sentiment = "negative" if change < 0 else "positive"
+            if change > 0:
+                sentiment = "positive"
+                change_description = f"+{change:.1f}%p 개선"
+            elif change < 0:
+                sentiment = "negative"
+                change_description = f"{change:.1f}%p 하락"
+            else:
+                sentiment = "neutral"
+                change_description = "큰 변화 없음"
 
             return {
                 "label": _CATEGORY_LABELS.get(category, category),
                 "score": score,
                 "change": change,
+                "change_description": change_description,
                 "sentiment": sentiment,
                 "related_keywords": related,
                 "insight_text": self._build_insight_text(category, related_strs, change, score, keyword_counts),
