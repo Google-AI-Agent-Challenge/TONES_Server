@@ -71,4 +71,5 @@ class DocsExportResponse(BaseModel):
     message: str
     document_id: Optional[str] = None
     document_url: Optional[str] = None
+    report_markdown: Optional[str] = None
 
