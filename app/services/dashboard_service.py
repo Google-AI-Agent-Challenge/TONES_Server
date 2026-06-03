@@ -1078,7 +1078,7 @@ class DashboardService:
                 if product_id:
                     sql += " AND r.product_id = %s"
                     params.append(product_id)
-                sql += " GROUP BY k.keyword ORDER BY cnt DESC LIMIT 6"
+                sql += " GROUP BY k.keyword ORDER BY cnt DESC LIMIT 5"
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
                 cursor.close()
@@ -1155,13 +1155,28 @@ class DashboardService:
 
     # 카테고리별 대표 키워드 매핑 (키워드 → 카테고리 분류용)
     _CATEGORY_KEYWORD_MAP = {
-        "ingredients": ["성분", "자극", "트러블", "진정", "피부결", "여드름", "붉", "순해", "순하", "민감", "피부 고민", "자극성", "피부진정", "저자극", "보습", "재구매", "산뜻", "피부결 만족"],
-        "formulation": ["제형", "흡수", "끈적", "발림", "촉촉", "수분", "밀림", "밀려", "발리", "보풀", "찢", "두께", "밀착", "에센스", "닦토", "부드러"],
-        "container": ["용기", "뚜껑", "집게", "패키지", "디자인", "포장", "캡", "불편", "편리"],
+        "ingredients": [
+            "성분", "자극", "트러블", "진정", "피부결", "여드름", "붉", "순해", "순하", "민감",
+            "피부 고민", "자극성", "피부진정", "저자극", "보습", "재구매", "산뜻", "피부결 만족",
+            "효과", "효능", "피부 개선", "피부 변화", "각질", "피부톤", "미백", "수분감", "모공",
+            "피부 진정", "트러블케어", "진정효과", "보습력", "리뷰",
+        ],
+        "formulation": [
+            "제형", "흡수", "끈적", "발림", "촉촉", "수분", "밀림", "밀려", "발리", "보풀",
+            "찢", "두께", "밀착", "에센스", "닦토", "부드러", "사용감", "질감", "겉돔", "번들",
+            "발라", "바르", "발림성", "텍스처", "피부 흡수", "흡수력",
+        ],
+        "container": [
+            "용기", "뚜껑", "집게", "패키지", "디자인", "포장", "캡", "불편", "편리",
+            "용기불량", "파손", "누액", "펌프", "새는", "불량", "도포구", "용기 디자인",
+        ],
     }
 
     # 부정 신호 키워드 (해당 키워드가 포함되면 부정 방향으로 판단)
-    _NEGATIVE_SIGNAL_KWS = ["자극", "트러블", "여드름", "붉", "불편", "끈적", "밀림", "밀려", "보풀", "찢", "뚜껑 불편", "집게 불편", "따가", "뒤집"]
+    _NEGATIVE_SIGNAL_KWS = [
+        "자극", "트러블", "여드름", "붉", "불편", "끈적", "밀림", "밀려", "보풀", "찢",
+        "뚜껑 불편", "집게 불편", "따가", "뒤집", "파손", "누액", "새는", "불량",
+    ]
 
     def _categorize_keyword(self, keyword: str) -> str:
         for category, kws in self._CATEGORY_KEYWORD_MAP.items():
@@ -1173,11 +1188,15 @@ class DashboardService:
     def _is_negative_keyword(self, keyword: str) -> bool:
         return any(neg in keyword for neg in self._NEGATIVE_SIGNAL_KWS)
 
-    def _build_insight_text(self, category: str, related_keywords: list, change: float, score: float) -> str:
-        kw_str = ", ".join([f"'{k}'" for k in related_keywords]) if related_keywords else None
+    def _build_insight_text(self, category: str, related_keywords: list, change: float, score: float, keyword_counts: dict = None) -> str:
+        def _fmt_kw(k: str) -> str:
+            if keyword_counts and k in keyword_counts:
+                return f"'{k}'({keyword_counts[k]}회)"
+            return f"'{k}'"
+
         category_label = {"ingredients": "성분·피부 진정", "formulation": "제형·발림성", "container": "용기·편의성"}.get(category, category)
 
-        if not kw_str:
+        if not related_keywords:
             if change > 0:
                 return f"{category_label} 관련 만족도가 전기 대비 {change:+.1f}%p 개선되었습니다."
             elif change < 0:
@@ -1189,19 +1208,20 @@ class DashboardService:
         pos_kws = [k for k in related_keywords if not self._is_negative_keyword(k)]
 
         if neg_kws and change < 0:
-            neg_str = ", ".join([f"'{k}'" for k in neg_kws])
-            return f"{neg_str} 키워드가 급상승하며 {category_label} 관련 불만 반응이 증가하고 있습니다. (만족도 {change:+.1f}%p)"
+            neg_str = ", ".join(_fmt_kw(k) for k in neg_kws)
+            return f"급상승 키워드 {neg_str}가 {category_label} 관련 불만 반응과 연관됩니다. 만족도 {change:+.1f}%p 하락했습니다."
         elif neg_kws and change >= 0:
-            neg_str = ", ".join([f"'{k}'" for k in neg_kws])
-            return f"{neg_str} 키워드 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. (만족도 {change:+.1f}%p)"
+            neg_str = ", ".join(_fmt_kw(k) for k in neg_kws)
+            return f"급상승 키워드 {neg_str} 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. (만족도 {change:+.1f}%p)"
         elif pos_kws and change > 0:
-            pos_str = ", ".join([f"'{k}'" for k in pos_kws])
-            return f"{pos_str} 키워드가 급상승하며 {category_label} 만족도가 개선 추세입니다. (만족도 {change:+.1f}%p)"
+            pos_str = ", ".join(_fmt_kw(k) for k in pos_kws)
+            return f"급상승 키워드 {pos_str}가 {category_label} 만족도 개선을 뒷받침합니다. (만족도 {change:+.1f}%p)"
         elif pos_kws and change < 0:
-            pos_str = ", ".join([f"'{k}'" for k in pos_kws])
-            return f"{pos_str} 언급이 있었으나 {category_label} 전반적 만족도는 하락하였습니다. 세부 리뷰 확인을 권장합니다. (만족도 {change:+.1f}%p)"
+            pos_str = ", ".join(_fmt_kw(k) for k in pos_kws)
+            return f"급상승 키워드 {pos_str} 언급이 있었으나 {category_label} 전반적 만족도는 하락했습니다. 세부 리뷰 확인을 권장합니다. (만족도 {change:+.1f}%p)"
         else:
-            return f"{kw_str} 키워드가 급상승하며 {category_label} 관련 이슈가 주목받고 있습니다. (만족도 {change:+.1f}%p)"
+            kw_str = ", ".join(_fmt_kw(k) for k in related_keywords)
+            return f"급상승 키워드 {kw_str}가 {category_label} 관련 이슈와 연관됩니다. (만족도 {change:+.1f}%p)"
 
     def fetch_insights(self, product_id: Optional[str], period_days: int) -> dict:
         """
@@ -1258,10 +1278,12 @@ class DashboardService:
         t_attr = this_agg["attribute_scores"]
         l_attr = last_agg["attribute_scores"]
 
-        # 급상승 키워드 조회 후 카테고리별 분류
+        # 급상승 키워드 조회 후 카테고리별 분류 및 언급 횟수 수집
         trending = self.fetch_trending_keywords(product_id, period_days)
         category_keywords: dict = {"ingredients": [], "formulation": [], "container": []}
+        keyword_counts: dict = {}  # keyword → count (trending-keywords API 응답 기반)
         for item in trending:
+            keyword_counts[item["keyword"]] = item["count"]
             cat = self._categorize_keyword(item["keyword"])
             if cat in category_keywords:
                 category_keywords[cat].append(item["keyword"])
@@ -1271,7 +1293,6 @@ class DashboardService:
             change = round((this_score - last_score) * 100, 1)
             related = category_keywords.get(category, [])
 
-            # sentiment 결정: 변동치 방향 + 관련 키워드 부정 신호 조합
             sentiment = "negative" if change < 0 else "positive"
 
             return {
@@ -1279,7 +1300,7 @@ class DashboardService:
                 "change": change,
                 "sentiment": sentiment,
                 "related_keywords": related,
-                "insight_text": self._build_insight_text(category, related, change, score),
+                "insight_text": self._build_insight_text(category, related, change, score, keyword_counts),
             }
 
         result = {
