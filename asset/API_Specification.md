@@ -223,14 +223,42 @@
   ```
 
 #### `GET /api/dashboard/insights`
-- **설명**: 화장품 3대 주요 VOC 만족도(성분진정, 제형흡수, 용기편의) 백분율 점수 및 전주 대비 증감폭(%p)을 가져옵니다.
+- **설명**: 화장품 3대 주요 VOC 만족도(성분진정, 제형흡수, 용기편의) 백분율 점수 및 전주 대비 증감폭(%p)을 가져옵니다. Top 5 급상승 키워드 중 해당 카테고리와 연관된 키워드 목록(언급 횟수 포함)이 `related_keywords`에 함께 반환됩니다.
 - **인증**: 🔑
 - **Response** (200 OK):
   ```json
   {
-    "ingredients": { "score": 88.5, "change": 3.2 },
-    "formulation": { "score": 92.0, "change": 1.5 },
-    "container": { "score": 64.2, "change": -8.4 }
+    "ingredients": {
+      "label": "성분 및 피부 진정",
+      "score": 88.5,
+      "change": 3.2,
+      "sentiment": "positive",
+      "related_keywords": [
+        { "keyword": "자극", "count": 48 },
+        { "keyword": "진정", "count": 29 }
+      ],
+      "insight_text": "급상승 키워드 '자극'(48회), '진정'(29회)가 성분·피부 진정 관련 이슈와 연관됩니다. (만족도 +3.2%p)"
+    },
+    "formulation": {
+      "label": "제형 흡수력 및 발림성",
+      "score": 92.0,
+      "change": 1.5,
+      "sentiment": "positive",
+      "related_keywords": [
+        { "keyword": "끈적임", "count": 19 }
+      ],
+      "insight_text": "제형·발림성 관련 만족도가 전기 대비 +1.5%p 개선되었습니다."
+    },
+    "container": {
+      "label": "용기 불량 및 편리성",
+      "score": 64.2,
+      "change": -8.4,
+      "sentiment": "negative",
+      "related_keywords": [
+        { "keyword": "용기불량", "count": 22 }
+      ],
+      "insight_text": "급상승 키워드 '용기불량'(22회)가 용기·편의성 관련 불만 반응과 연관됩니다. 만족도 -8.4%p 하락했습니다."
+    }
   }
   ```
 

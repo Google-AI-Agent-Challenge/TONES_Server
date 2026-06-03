@@ -1288,19 +1288,31 @@ class DashboardService:
             if cat in category_keywords:
                 category_keywords[cat].append(item["keyword"])
 
+        _CATEGORY_LABELS = {
+            "ingredients": "성분 및 피부 진정",
+            "formulation": "제형 흡수력 및 발림성",
+            "container": "용기 불량 및 편리성",
+        }
+
         def _build_entry(category: str, this_score: float, last_score: float) -> dict:
             score = round(this_score * 100, 1)
             change = round((this_score - last_score) * 100, 1)
-            related = category_keywords.get(category, [])
+            related_strs = category_keywords.get(category, [])
+            # 프론트엔드에서 언급 횟수까지 바로 표시할 수 있도록 {keyword, count} 구조로 전달
+            related = [
+                {"keyword": kw, "count": keyword_counts.get(kw, 0)}
+                for kw in related_strs
+            ]
 
             sentiment = "negative" if change < 0 else "positive"
 
             return {
+                "label": _CATEGORY_LABELS.get(category, category),
                 "score": score,
                 "change": change,
                 "sentiment": sentiment,
                 "related_keywords": related,
-                "insight_text": self._build_insight_text(category, related, change, score, keyword_counts),
+                "insight_text": self._build_insight_text(category, related_strs, change, score, keyword_counts),
             }
 
         result = {
