@@ -1204,12 +1204,6 @@ class DashboardService:
                 return f"'{k}'({keyword_counts[k]}회)"
             return f"'{k}'"
 
-        def _fmt_change(c: float) -> str:
-            """change == 0이면 수치 대신 문구, 아니면 +/-X.X%p 형태로 반환."""
-            if c == 0.0:
-                return "큰 변화 없음"
-            return f"{c:+.1f}%p"
-
         category_label = {"ingredients": "성분·피부 진정", "formulation": "제형·발림성", "container": "용기·편의성"}.get(category, category)
 
         if not related_keywords:
@@ -1223,13 +1217,24 @@ class DashboardService:
         neg_kws = [k for k in related_keywords if self._is_negative_keyword(k)]
         pos_kws = [k for k in related_keywords if not self._is_negative_keyword(k)]
 
+        # 변동폭이 0.0%p인 경우 수치 정보 괄호 및 문구를 제거하고 완전한 변화 없음 문맥으로 서술
+        if change == 0.0:
+            if neg_kws:
+                neg_str = ", ".join(_fmt_kw(k) for k in neg_kws)
+                return f"급상승 키워드 {neg_str} 언급이 감지되었으나, {category_label} 전체 만족도는 전기 대비 큰 변동 없이 안정적으로 유지되었습니다."
+            elif pos_kws:
+                pos_str = ", ".join(_fmt_kw(k) for k in pos_kws)
+                return f"급상승 키워드 {pos_str}에 대한 긍정적 반응이 관찰되며 {category_label} 만족도가 견고하게 유지되는 흐름입니다."
+            else:
+                kw_str = ", ".join(_fmt_kw(k) for k in related_keywords)
+                return f"급상승 키워드 {kw_str}와 연계하여 분석한 결과, {category_label} 전반에서 유의미한 만족도 변동은 감지되지 않았습니다."
+
         if neg_kws and change < 0:
             neg_str = ", ".join(_fmt_kw(k) for k in neg_kws)
             return f"급상승 키워드 {neg_str}가 {category_label} 관련 불만 반응과 연관됩니다. 만족도 {change:+.1f}%p 하락했습니다."
         elif neg_kws and change >= 0:
             neg_str = ", ".join(_fmt_kw(k) for k in neg_kws)
-            change_str = _fmt_change(change)
-            return f"급상승 키워드 {neg_str} 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. ({change_str})"
+            return f"급상승 키워드 {neg_str} 언급이 늘었으나, {category_label} 전체 점수는 유지되거나 소폭 개선되었습니다. (+{change:.1f}%p)"
         elif pos_kws and change > 0:
             pos_str = ", ".join(_fmt_kw(k) for k in pos_kws)
             return f"급상승 키워드 {pos_str}가 {category_label} 만족도 개선을 뒷받침합니다. (만족도 {change:+.1f}%p)"
@@ -1238,8 +1243,7 @@ class DashboardService:
             return f"급상승 키워드 {pos_str} 언급이 있었으나 {category_label} 전반적 만족도는 하락했습니다. 세부 리뷰 확인을 권장합니다. (만족도 {change:+.1f}%p)"
         else:
             kw_str = ", ".join(_fmt_kw(k) for k in related_keywords)
-            change_str = _fmt_change(change)
-            return f"급상승 키워드 {kw_str}가 {category_label} 관련 이슈와 연관됩니다. ({change_str})"
+            return f"급상승 키워드 {kw_str}가 {category_label} 관련 이슈와 연관되며 전기 대비 {change:+.1f}%p 변동을 기록했습니다."
 
     def fetch_insights(self, product_id: Optional[str], period_days: int) -> dict:
         """
