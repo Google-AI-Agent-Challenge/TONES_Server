@@ -405,6 +405,18 @@ class AIService:
             "4. 서론 없이 첫 번째 섹션 제목부터 바로 시작합니다."
         )
 
+        def _fmt_wow(diff: float) -> str:
+            """WoW 변동값을 문자열로 변환. 0이면 수치 대신 '변동 없음' 반환."""
+            pct = round(diff * 100, 1)
+            if pct == 0.0:
+                return "변동 없음"
+            return f"{diff:+.4f} ({pct:+.1f}%p)"
+
+        def _fmt_rating(diff: float) -> str:
+            if diff == 0.0:
+                return "변동 없음"
+            return f"{diff:+.2f}점"
+
         prompt = (
             f"대상 제품명: {product_name}\n\n"
             f"[이번 주 통계]\n"
@@ -416,10 +428,10 @@ class AIService:
             f"- 제형/발림성 만족도: {t_attr['formulation']:.4f}\n"
             f"- 용기/편의성 만족도: {t_attr['container']:.4f}\n\n"
             f"[지난 주 대비 변동 폭 (WoW)]\n"
-            f"- 평점 변화: {rating_diff:+.2f}점\n"
-            f"- 성분/고민 변동: {ing_diff:+.4f} ({ing_diff*100:+.1f}%p)\n"
-            f"- 제형/발림성 변동: {form_diff:+.4f} ({form_diff*100:+.1f}%p)\n"
-            f"- 용기/편의성 변동: {cont_diff:+.4f} ({cont_diff*100:+.1f}%p)"
+            f"- 평점 변화: {_fmt_rating(rating_diff)}\n"
+            f"- 성분/고민 변동: {_fmt_wow(ing_diff)}\n"
+            f"- 제형/발림성 변동: {_fmt_wow(form_diff)}\n"
+            f"- 용기/편의성 변동: {_fmt_wow(cont_diff)}"
         )
 
         # 1. GCP Vertex AI SDK 브리핑 생성 시도
@@ -506,14 +518,26 @@ class AIService:
         else:
             issue_text = f"이번 주 {product_name}에서 특별히 주의가 필요한 급격한 하락 지표는 감지되지 않았습니다. 다만 소폭 변동이 있는 속성에 대한 지속 모니터링을 권장합니다."
 
+        def _fmt_pct(diff: float) -> str:
+            """%p 변동값 문자열 변환. 0이면 '큰 변화 없음' 반환."""
+            pct = round(diff * 100, 1)
+            if pct == 0.0:
+                return "큰 변화 없음"
+            return f"{pct:+.1f}%p"
+
         # 섹션 3: 트렌드 분석
         dominant = max([(abs(ing_diff), "성분·피부 진정"), (abs(form_diff), "제형·발림성"), (abs(cont_diff), "용기·편의성")], key=lambda x: x[0])
+        dominant_pct = round(dominant[0] * 100, 1)
+        if dominant_pct == 0.0:
+            dominant_desc = "3대 속성 모두 전기와 유사한 수준을 유지하고 있습니다."
+        else:
+            dominant_desc = f"이 중 '{dominant[1]}' 영역의 변동폭({dominant_pct:.1f}%p)이 가장 크게 나타나 고객 경험에 가장 큰 영향을 미친 것으로 분석됩니다."
         trend_text = (
             f"이번 주 {product_name}의 고객 반응을 종합하면, "
-            f"성분·피부 진정 속성은 {ing_diff*100:+.1f}%p, "
-            f"제형·발림성은 {form_diff*100:+.1f}%p, "
-            f"용기·편의성은 {cont_diff*100:+.1f}%p 변동을 기록하였습니다. "
-            f"이 중 '{dominant[1]}' 영역의 변동폭({dominant[0]*100:.1f}%p)이 가장 크게 나타나 고객 경험에 가장 큰 영향을 미친 것으로 분석됩니다. "
+            f"성분·피부 진정 속성은 {_fmt_pct(ing_diff)}, "
+            f"제형·발림성은 {_fmt_pct(form_diff)}, "
+            f"용기·편의성은 {_fmt_pct(cont_diff)} 변동을 기록하였습니다. "
+            f"{dominant_desc} "
             f"전반적인 리뷰 흐름은 {'긍정적인 방향으로 개선되고 있어 브랜드 신뢰도 제고에 기여하고 있습니다.' if len(positives) >= len(negatives) else '일부 속성에서 하락세가 감지되어 선제적 품질 관리가 필요한 시점입니다.'}"
         )
 
