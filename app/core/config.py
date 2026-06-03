@@ -24,8 +24,11 @@ class Settings(BaseSettings):
     # Google Gemini Config
     GEMINI_API_KEY: Optional[str] = None
 
-    # Google Docs API Config (GCP 서비스 계정 JSON 키, 한 줄 JSON 문자열 형태)
+    # Google Docs API Config
+    # 방법 1 (운영/Cloud Run): JSON 키 내용 전체를 한 줄 문자열로 직접 주입
     GOOGLE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    # 방법 2 (로컬 개발): JSON 키 파일 경로 지정 (GOOGLE_SERVICE_ACCOUNT_JSON 없을 때 fallback)
+    GOOGLE_SERVICE_ACCOUNT_KEY_FILE: Optional[str] = None
     
     # CORS Config
     BACKEND_CORS_ORIGINS: List[str] = ["*"]
