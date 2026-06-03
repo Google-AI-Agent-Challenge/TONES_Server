@@ -323,6 +323,7 @@
   - `period` (integer, optional): 분석 기간 (일)
   - `sentiment` (string, optional): 감성 구분 (`positive`, `neutral`, `negative`)
   - `q` (string, optional): 검색어 (리뷰 본문 LIKE 검색)
+  - `priority` (boolean, default=false): `true` 설정 시 우선 확인 리뷰(`sentiment=negative AND rating≤2`)만 집계. `sentiment` 파라미터보다 우선 적용됨
 - **Response** (200 OK):
   ```json
   {
@@ -338,6 +339,7 @@
   - `period` (integer, optional): 분석 기간 (일)
   - `sentiment` (string, optional): 감성 구분 (`positive`, `neutral`, `negative`)
   - `q` (string, optional): 검색어 (리뷰 본문 LIKE 검색)
+  - `priority` (boolean, default=false): `true` 설정 시 우선 확인 리뷰(`sentiment=negative AND rating≤2`)만 반환. `sentiment` 파라미터보다 우선 적용됨
   - `page` (integer, default=1): 페이지 번호
   - `limit` (integer, default=20): 한 페이지 크기
 - **Response** (200 OK):
