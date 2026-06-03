@@ -2,7 +2,7 @@ import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.v1.api import api_router
+from app.domains.router import api_router
 
 # Sentry 초기화 (DSN이 존재할 때만 실행)
 if settings.SENTRY_DSN:
