@@ -983,7 +983,7 @@ class DashboardService:
                 start_last = (today - timedelta(days=2 * period_days)).isoformat()
 
                 # 이번 기간 쿼리
-                sql = "SELECT id, product_id, rating, sentiment, ai_summary, score_ingredients, score_formulation, score_container FROM public.reviews WHERE review_date >= %s"
+                sql = "SELECT id, product_id, rating, sentiment, ai_summary, score_ingredients, score_formulation, score_container, is_priority_review FROM public.reviews WHERE review_date >= %s"
                 params = [start_this]
                 if product_id:
                     sql += " AND product_id = %s"
@@ -994,7 +994,8 @@ class DashboardService:
                     "id": str(r[0]), "product_id": str(r[1]), "rating": int(r[2]), "sentiment": str(r[3]), "ai_summary": r[4],
                     "score_ingredients": float(r[5]) if r[5] is not None else 0.5,
                     "score_formulation": float(r[6]) if r[6] is not None else 0.5,
-                    "score_container": float(r[7]) if r[7] is not None else 0.5
+                    "score_container": float(r[7]) if r[7] is not None else 0.5,
+                    "is_priority_review": bool(r[8]) if r[8] is not None else False
                 } for r in rows_this]
 
                 # 지난 기간 쿼리
@@ -1026,8 +1027,16 @@ class DashboardService:
         neg_rate_last = round((neg_count_last / last_agg["total_reviews"] * 100), 1) if last_agg["total_reviews"] > 0 else 0.0
         neg_diff = round(neg_rate_this - neg_rate_last, 1)
 
-        # 우선 확인 리뷰 요약
-        urgent_reviews = [r for r in reviews_this if r.get("sentiment") == "negative" and r.get("rating", 3) <= 2]
+        # 우선 확인 리뷰 요약 (is_priority_review 컬럼이 명시된 경우 true/false 판단을 따르며, 컬럼이 존재하지 않을 시 기존 조건으로 폴백)
+        urgent_reviews = []
+        for r in reviews_this:
+            is_priority = r.get("is_priority_review")
+            if is_priority is not None:
+                if is_priority is True:
+                    urgent_reviews.append(r)
+            else:
+                if r.get("sentiment") == "negative" and r.get("rating", 3) <= 2:
+                    urgent_reviews.append(r)
         urgent_summary = []
         for r in urgent_reviews[:3]:
             urgent_summary.append({
