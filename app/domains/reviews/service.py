@@ -126,7 +126,7 @@ class ReviewService:
                 failure_count += 1
 
         dashboard_cache.invalidate_all()
-        print("[ReviewService] 리뷰 적재 완료 — 대시보드 캐시 전체 무효화")
+        print("[ReviewService] 리뷰 적재 완료 - 대시보드 캐시 전체 무효화")
 
         return {
             "status": "completed",

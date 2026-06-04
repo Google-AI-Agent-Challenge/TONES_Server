@@ -139,7 +139,19 @@ def main():
         # 6) 상품 매핑 검사
         product_id = product_map.get(option_name_str)
         if not product_id:
-            print(f"[SKIP] reason=product_mapping_missing option_name={option_name_str}")
+            goods_no = row.get("goods_no")
+            if goods_no:
+                goods_no_str = str(goods_no).strip()
+                GOODS_NO_MAP = {
+                    "A000000231714": "88ab38d5-c5fa-4b54-a62d-5a3d0cd0b270", # 복숭아 패드
+                    "A000000185135": "cf920939-7d95-4e2e-924f-83d64289373c", # 미나리 패드
+                    "A000000248098": "627e8cc4-383c-42a7-82de-a8b92b427098", # 당근 패드
+                    "A000000200396": "3f128ad0-7228-4f7e-8c48-f3abc894337e", # 감자 패드
+                    "A000000157075": "d8d32744-1351-4c96-a008-b4934508f758", # 도토리 패드
+                }
+                product_id = GOODS_NO_MAP.get(goods_no_str)
+        if not product_id:
+            print(f"[SKIP] reason=product_mapping_missing option_name={option_name_str} goods_no={row.get('goods_no')}")
             map_failed += 1
             skipped += 1
             continue

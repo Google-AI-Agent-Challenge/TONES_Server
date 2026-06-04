@@ -41,8 +41,8 @@ SKINFOOD_PAD_PRODUCTS = {
     "샤인머스캣 패드": {"id": "edfb4725-3f57-45e5-aeb2-c6320634947d", "name": "샤인머스캣 패드", "description": "", "price": 0},
     "핑크자몽 패드": {"id": "e5f77ae3-b0ad-4198-b2df-a466e8a5d553", "name": "핑크자몽 패드", "description": "", "price": 0},
     "미나리 패드": {"id": "cf920939-7d95-4e2e-924f-83d64289373c", "name": "미나리 패드", "description": "", "price": 0},
-    "당근 패드": {"id": "3f128ad0-7228-4f7e-8c48-f3abc894337e", "name": "당근 패드", "description": "", "price": 0},
-    "감자 패드": {"id": "627e8cc4-383c-42a7-82de-a8b92b427098", "name": "감자 패드", "description": "", "price": 0},
+    "당근 패드": {"id": "627e8cc4-383c-42a7-82de-a8b92b427098", "name": "당근 패드", "description": "", "price": 0},
+    "감자 패드": {"id": "3f128ad0-7228-4f7e-8c48-f3abc894337e", "name": "감자 패드", "description": "", "price": 0},
     "도토리 패드": {"id": "d8d32744-1351-4c96-a008-b4934508f758", "name": "도토리 패드", "description": "", "price": 0},
 }
 
@@ -63,8 +63,8 @@ TARGET_PADS = {
 GOODS_TO_PRODUCT_ID = {
     "A000000231714": "88ab38d5-c5fa-4b54-a62d-5a3d0cd0b270",
     "A000000185135": "cf920939-7d95-4e2e-924f-83d64289373c",
-    "A000000248098": "3f128ad0-7228-4f7e-8c48-f3abc894337e",
-    "A000000200396": "627e8cc4-383c-42a7-82de-a8b92b427098",
+    "A000000248098": "627e8cc4-383c-42a7-82de-a8b92b427098",
+    "A000000200396": "3f128ad0-7228-4f7e-8c48-f3abc894337e",
     "A000000157075": "d8d32744-1351-4c96-a008-b4934508f758",
 }
 
@@ -112,39 +112,12 @@ def match_product_id_by_code_and_option(goods_no: str, option_name: str) -> str 
 
 # ==================== DB 연동 ====================
 def get_connection():
-    from app.api.deps import get_db_connection
+    from app.database.connection import get_db_connection
     return get_db_connection()
 
 # ==================== 제품 등록 (유지) ====================
 def register_products(conn) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    products = []
-    for _, info in SKINFOOD_PAD_PRODUCTS.items():
-        products.append({
-            "id": info["id"],
-            "name": info["name"],
-            "description": info["description"],
-            "price": info["price"],
-            "created_at": now,
-            "updated_at": now,
-        })
-    cursor = conn.cursor()
-    for prod in products:
-        cursor.execute(
-            f"""
-            INSERT INTO {TABLE_PRODUCTS} (id, name, description, price, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                price = EXCLUDED.price,
-                updated_at = EXCLUDED.updated_at;
-            """,
-            (prod["id"], prod["name"], prod["description"], prod["price"], prod["created_at"], prod["updated_at"]),
-        )
-    conn.commit()
-    cursor.close()
-    print(f"✅ 제품 {len(products)}개 upsert 완료")
+    print("ℹ️ Products are already seeded in the database via gcp_schema.sql. Skipping register_products.")
 
 # ==================== [ADD] Google Sheets 리더 구현 ====================
 def load_reviews_from_google_sheet() -> pd.DataFrame:
@@ -305,6 +278,12 @@ def upload_reviews_to_supabase(conn, records: list[dict]) -> None:
 
 # ==================== 실행 ====================
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Upload Olive Young reviews to GCP Cloud SQL")
+    parser.add_argument("--file", type=str, default="review_crawler/data/olive_young_reviews.csv", help="Local CSV file path")
+    parser.add_argument("--use-google-sheets", action="store_true", help="Use Google Sheets instead of local CSV")
+    args = parser.parse_args()
+
     conn = get_connection()
     if not conn:
         print("❌ DB 연결 실패. 종료합니다.")
@@ -312,8 +291,21 @@ if __name__ == "__main__":
         
     register_products(conn)
     
-    # 1. Google Sheets에서 DataFrame 로드
-    df = load_reviews_from_google_sheet()
+    df = pd.DataFrame()
+    if args.use_google_sheets:
+        print("🌐 Google Sheets에서 데이터를 로드합니다...")
+        df = load_reviews_from_google_sheet()
+    else:
+        file_path = args.file
+        print(f"📄 로컬 CSV 파일에서 데이터를 로드합니다: {file_path}")
+        if os.path.exists(file_path):
+            try:
+                df = pd.read_csv(file_path, encoding="utf-8-sig")
+            except Exception as e:
+                print(f"[ERROR] CSV 파일 읽기 실패: {e}")
+        else:
+            print(f"❌ 파일을 찾을 수 없습니다: {file_path}")
+
     if not df.empty:
         # 2. 전처리 및 검증
         records = preprocess_reviews_for_supabase(df)
@@ -325,6 +317,6 @@ if __name__ == "__main__":
         else:
             print("⚠️ 업로드할 레코드가 전처리 결과 존재하지 않습니다.")
     else:
-        print("⚠️ Google Sheets에서 로드된 데이터가 없습니다.")
+        print("⚠️ 로드된 데이터가 없습니다.")
         
     conn.close()

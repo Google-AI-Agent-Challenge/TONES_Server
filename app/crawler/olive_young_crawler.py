@@ -737,9 +737,10 @@ def apply_sort(driver, opt_name, sort_key):
         return False
 
 # ==============================================================================
-# 다음 페이지 이동
+# 다음 페이지 이동 (페이징 버튼 클릭 또는 무한 스크롤 다운 fallback)
 # ==============================================================================
 def click_next_page(driver):
+    # 1. 페이징 버튼 클릭 시도 (하위 호환성 유지)
     clicked = driver.execute_script("""
         function clickNextPageDeep(root) {
             if (!root) return false;
@@ -773,14 +774,85 @@ def click_next_page(driver):
         }
         return clickNextPageDeep(document);
     """)
-    return clicked
+    if clicked:
+        return True
+
+    # 2. 모바일 에뮬레이션(무한 스크롤) 환경 대응
+    # 스크롤 전 리뷰 개수 측정
+    prev_count = driver.execute_script("""
+        function countReviews(root) {
+            if (!root) return 0;
+            let count = 0;
+            const items = root.querySelectorAll ? root.querySelectorAll('oy-review-review-item') : [];
+            count += items.length;
+            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const el of all) {
+                if (el.shadowRoot) {
+                    count += countReviews(el.shadowRoot);
+                }
+            }
+            return count;
+        }
+        return countReviews(document);
+    """)
+
+    # 아래로 스크롤하여 추가 로드 트리거
+    driver.execute_script("window.scrollBy(0, 1200);")
+    time.sleep(1.8)
+
+    # 스크롤 후 리뷰 개수 측정
+    new_count = driver.execute_script("""
+        function countReviews(root) {
+            if (!root) return 0;
+            let count = 0;
+            const items = root.querySelectorAll ? root.querySelectorAll('oy-review-review-item') : [];
+            count += items.length;
+            const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+            for (const el of all) {
+                if (el.shadowRoot) {
+                    count += countReviews(el.shadowRoot);
+                }
+            }
+            return count;
+        }
+        return countReviews(document);
+    """)
+
+    # 변화가 없다면 조금 더 강하게 스크롤 시도
+    if new_count == prev_count:
+        driver.execute_script("window.scrollBy(0, 1000);")
+        time.sleep(1.5)
+        new_count = driver.execute_script("""
+            function countReviews(root) {
+                if (!root) return 0;
+                let count = 0;
+                const items = root.querySelectorAll ? root.querySelectorAll('oy-review-review-item') : [];
+                count += items.length;
+                const all = Array.from(root.querySelectorAll ? root.querySelectorAll('*') : []);
+                for (const el of all) {
+                    if (el.shadowRoot) {
+                        count += countReviews(el.shadowRoot);
+                    }
+                }
+                return count;
+            }
+            return countReviews(document);
+        """)
+
+    # API 배치 응답 수신 여부 확인
+    has_batches = driver.execute_script("return (window.__oyBatches || []).length > 0;")
+    
+    # 리뷰 개수가 증가했거나 새로 가로챈 API 배치가 존재하면 계속 진행 가능
+    return (new_count > prev_count) or has_batches
 
 # [ADD] 전역 기존 수집된 리뷰 키 세트
 ALREADY_COLLECTED_KEYS = set()
+DB_STATS = {}
 TOTAL_COLLECTED_TEMP_COUNT = 0
+GLOBAL_CRAWLED_REVIEWS = []
 
 def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, skin_type, sort_type, args):
-    global ALREADY_COLLECTED_KEYS, TOTAL_COLLECTED_TEMP_COUNT
+    global ALREADY_COLLECTED_KEYS, TOTAL_COLLECTED_TEMP_COUNT, GLOBAL_CRAWLED_REVIEWS
     limit_revs = args.limit_reviews
     max_pages = args.max_pages
     delay = 1.2
@@ -849,6 +921,7 @@ def collect_reviews_for_condition(driver, goods_no, filter_type, option_name, sk
 # [FIX] 묶음 옵션 필터링 기반 크롤링 함수 (대기/폴링 보완)
 # ==============================================================================
 def crawl_with_options_filtering(driver, goods_no, page_info, args):
+    global GLOBAL_CRAWLED_REVIEWS
     url = f"https://m.oliveyoung.co.kr/m/goods/getGoodsDetail.do?goodsNo={goods_no}"
     print(f"\n{'='*60}")
     print(f"[PRODUCT] product_code={goods_no} product_name={page_info['name']}")
@@ -1244,6 +1317,7 @@ def crawl_with_options_filtering(driver, goods_no, page_info, args):
                 driver, goods_no, filter_type, opt_name, skin_name, "latest", args
             )
             all_collected_reviews.extend(collected)
+            GLOBAL_CRAWLED_REVIEWS.extend(collected)
 
         # 상품 옵션 초기화 후 닫기
         driver.execute_script(_JS_CLICK_BY_TEXT, "상품 옵션")
@@ -1277,6 +1351,7 @@ def crawl_with_options_filtering(driver, goods_no, page_info, args):
 # 단품 상품 수집
 # ==============================================================================
 def crawl_raw_reviews_from_page(driver, goods_no, page_info, args):
+    global GLOBAL_CRAWLED_REVIEWS
     if goods_no in ["A000000166709", "A000000206889"]:
         return crawl_with_options_filtering(driver, goods_no, page_info, args)
 
@@ -1351,6 +1426,7 @@ def crawl_raw_reviews_from_page(driver, goods_no, page_info, args):
             driver, goods_no, filter_type, opt_name, "None", sort_key, args
         )
         all_collected_reviews.extend(collected)
+        GLOBAL_CRAWLED_REVIEWS.extend(collected)
 
         if check_login_required(driver):
             print(f"[SKIP] product_code={goods_no} reason=login_required")
@@ -1493,6 +1569,7 @@ def crawl_raw_reviews_from_page(driver, goods_no, page_info, args):
             driver, goods_no, filter_type, opt_name, skin_name, "latest", args
         )
         all_collected_reviews.extend(collected)
+        GLOBAL_CRAWLED_REVIEWS.extend(collected)
 
     return all_collected_reviews
 
@@ -1518,9 +1595,36 @@ def main():
     print("="*60)
 
     ALREADY_COLLECTED_KEYS = set()
+    
+    # 1. DB에서 기존 수집된 리뷰 키 로드
+    try:
+        from app.database.connection import get_db_connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT review_id FROM reviews WHERE review_id IS NOT NULL;")
+        db_keys = [r[0] for r in cursor.fetchall() if r[0]]
+        ALREADY_COLLECTED_KEYS.update(db_keys)
+        print(f"[DB] 이미 존재하여 제외할 리뷰 키 개수: {len(db_keys)}")
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"[DB_ERROR] DB 연동 실패로 기존 키 로드 불가: {e}")
+
+    # 2. CSV 파일에서 기존 수집된 리뷰 키 로드
+    csv_path = "review_crawler/data/olive_young_reviews.csv"
+    if os.path.exists(csv_path):
+        try:
+            df = pd.read_csv(csv_path)
+            if "review_key" in df.columns:
+                csv_keys = df["review_key"].dropna().astype(str).tolist()
+                ALREADY_COLLECTED_KEYS.update(csv_keys)
+                print(f"[CSV] 파일({csv_path})에서 로드된 리뷰 키 개수: {len(csv_keys)}")
+        except Exception as e:
+            print(f"[CSV_ERROR] CSV 파일 로드 실패: {e}")
 
     driver = init_driver(args)
-    all_reviews = []
+    global GLOBAL_CRAWLED_REVIEWS
+    GLOBAL_CRAWLED_REVIEWS = []
     TOTAL_COLLECTED_TEMP_COUNT = 0
 
     try:
@@ -1528,7 +1632,7 @@ def main():
         if args.limit_products:
             product_list = product_list[:args.limit_products]
 
-        total_goal = 1500
+        total_goal = 4500
         for idx, (goods_no, page_info) in enumerate(product_list):
             current_total = len(ALREADY_COLLECTED_KEYS) + TOTAL_COLLECTED_TEMP_COUNT
             if current_total >= total_goal:
@@ -1538,7 +1642,6 @@ def main():
             print(f"\n[PRODUCT] index={idx+1}/{len(product_list)} product_code={goods_no} product_name={page_info['name']}")
             try:
                 page_reviews = crawl_raw_reviews_from_page(driver, goods_no, page_info, args)
-                all_reviews.extend(page_reviews)
                 print(f"[PRODUCT_DONE] product_code={goods_no} unique_saved={len(page_reviews)}")
             except Exception as e:
                 print(f"[ERROR] product_code={goods_no} filter_type=all type=crawl_error reason={e}")
@@ -1553,7 +1656,7 @@ def main():
         driver.quit()
 
     rows = []
-    for r in all_reviews:
+    for r in GLOBAL_CRAWLED_REVIEWS:
         rows.append({
             "goods_no":     r["goods_no"],
             "option_name":  r["option_name"] or "단품",

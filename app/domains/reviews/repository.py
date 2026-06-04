@@ -205,6 +205,33 @@ class ReviewRepository:
                 print(f"[ReviewRepository.fetch_by_ids] Cloud SQL fetch 실패: {e}")
         return [r for r in MOCK_REVIEWS if r["id"] in ids]
 
+    def _save_keywords(self, cursor, review_id: str, keywords: list) -> None:
+        if not keywords:
+            return
+        clean_kws = [kw.strip() for kw in keywords if kw and kw.strip()]
+        if not clean_kws:
+            return
+        
+        # 1) Bulk insert keywords ON CONFLICT DO NOTHING
+        placeholders = ",".join(["(%s)"] * len(clean_kws))
+        cursor.execute(f"INSERT INTO public.keywords (keyword) VALUES {placeholders} ON CONFLICT (keyword) DO NOTHING", clean_kws)
+        
+        # 2) Fetch all keyword IDs
+        placeholders_select = ",".join(["%s"] * len(clean_kws))
+        cursor.execute(f"SELECT id, keyword FROM public.keywords WHERE keyword IN ({placeholders_select})", clean_kws)
+        kw_rows = cursor.fetchall()
+        
+        # 3) Bulk insert review_keywords mapping
+        mapping_values = []
+        mapping_params = []
+        for kw_id, _ in kw_rows:
+            mapping_values.append("(%s::uuid, %s)")
+            mapping_params.extend([review_id, kw_id])
+        
+        if mapping_values:
+            mapping_sql = f"INSERT INTO public.review_keywords (review_id, keyword_id) VALUES {','.join(mapping_values)} ON CONFLICT DO NOTHING"
+            cursor.execute(mapping_sql, mapping_params)
+
     def save_bulk(self, sql_record: dict, keywords: list) -> None:
         """단일 리뷰를 DB에 원자적으로 적재 (pgvector + keywords)"""
         if self.conn is None:
@@ -236,15 +263,7 @@ class ReviewRepository:
                 sql_record["embedding"],
                 sql_record["score_ingredients"], sql_record["score_formulation"], sql_record["score_container"]
             ])
-            if keywords:
-                for kw in keywords:
-                    if kw and kw.strip():
-                        clean_kw = kw.strip()
-                        cursor.execute("INSERT INTO public.keywords (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING", [clean_kw])
-                        cursor.execute("SELECT id FROM public.keywords WHERE keyword = %s", [clean_kw])
-                        kw_id_row = cursor.fetchone()
-                        if kw_id_row:
-                            cursor.execute("INSERT INTO public.review_keywords (review_id, keyword_id) VALUES (%s::uuid, %s) ON CONFLICT DO NOTHING", [sql_record["id"], kw_id_row[0]])
+            self._save_keywords(cursor, sql_record["id"], keywords)
             self.conn.commit()
             cursor.close()
         except Exception as e:
@@ -282,15 +301,7 @@ class ReviewRepository:
                 sql_record["issue_type"], sql_record["issue_type"],
                 healed_summary, sql_record["review_id"]
             ])
-            if keywords:
-                for kw in keywords:
-                    if kw and kw.strip():
-                        clean_kw = kw.strip()
-                        cursor.execute("INSERT INTO public.keywords (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING", [clean_kw])
-                        cursor.execute("SELECT id FROM public.keywords WHERE keyword = %s", [clean_kw])
-                        kw_id_row = cursor.fetchone()
-                        if kw_id_row:
-                            cursor.execute("INSERT INTO public.review_keywords (review_id, keyword_id) VALUES (%s::uuid, %s) ON CONFLICT DO NOTHING", [sql_record["id"], kw_id_row[0]])
+            self._save_keywords(cursor, sql_record["id"], keywords)
             self.conn.commit()
             cursor.close()
         except Exception as e:
