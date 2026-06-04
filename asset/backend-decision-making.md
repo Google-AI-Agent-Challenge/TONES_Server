@@ -21,6 +21,7 @@
 | **통계 복원력** | **Heuristic 점수 복원 엔진** | 통계 집계 시 감성 스코어 컬럼이 누락된 구형 레코드 대상 정규식 역추출 및 평점/키워드 가중치 기반 휴리스틱 추정으로 통계 왜곡 방지 |
 | **데이터 파이프라인** | **Selenium 4.0.0+ & curl_cffi 0.6.0+** | Edge 모바일 에뮬레이션 및 가상 스크롤, XHR/Fetch API 인터셉터를 통한 올리브영 데이터 수집 (도커 배포 종속성에서 제외하여 프로덕션 경량화 달성) |
 | | **Pandas 2.0.0+ & openpyxl 3.1.0+** | 평점 균등 샘플링 가공 후 프리미엄 엑셀 적재 지원 (로컬 전용 패키지 격리) |
+| | **gspread 5.0.0+ & google-auth 2.0.0+** | 올리브영 크롤러에서 Google Sheets 연동 및 GCP 서비스 계정 인증 처리 (프로덕션 빌드 포함) |
 | **보안 및 미들웨어** | **pyjwt 2.8.0+** | C/Rust 컴파일러 빌드 오류 방지를 위해 `python-jose`를 대체한 순수 파이썬(Pure Python) JWT 기반 인증 아키텍처 구현 |
 | | **hashlib & hmac** | C/Rust 의존성이 무거운 `bcrypt`를 우회하여 순수 파이썬 해시 솔팅 및 단방향 암호화 처리 구현 |
 | | **Pydantic v2** | 컴파일 레벨 데이터 유효성 검증 및 인젝션 공격 원천 차단 |
@@ -33,7 +34,7 @@
 ## 🏗️ 주요 아키텍처 결정 사항 (Architectural Decisions)
 
 ### 1. FastAPI + Uvicorn 비동기 아키텍처 및 Pydantic v2 정적 검증
-- **비동기 동시성 제어**: 비동기 ASGI 웹 서버인 Uvicorig 위에서 FastAPI의 `async/await` 동시성 제어를 100% 활용하여 스루풋(Throughput)을 극대화하고 최저 대기시간(Latency)을 보장합니다.
+- **비동기 동시성 제어**: 비동기 ASGI 웹 서버인 Uvicorn 위에서 FastAPI의 `async/await` 동시성 제어를 100% 활용하여 스루풋(Throughput)을 극대화하고 최저 대기시간(Latency)을 보장합니다.
 - **스키마 수준 검증**: Pydantic v2 기반의 엄격한 데이터 유효성 검증 레이어를 구축하여 API 엔드포인트 도달 전에 비정상적인 데이터 주입을 원천 차단하고 구조화된 데이터 흐름(DTO 패턴)을 강제합니다.
 
 ### 2. pgvector 기반 실시간 시맨틱 검색 통합 (pgvector Semantic Search) [UPDATE]
