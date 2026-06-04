@@ -27,7 +27,7 @@ def get_reviews_count(
     period: Optional[int] = Query(None, description="조회 기간 범위 (일 수)"),
     sentiment: Optional[str] = Query(None, description="감성 구분 (positive, neutral, negative)"),
     q: Optional[str] = Query(None, description="검색어"),
-    priority: bool = Query(False, description="우선 확인 리뷰만 조회 (sentiment=negative AND rating<=2)"),
+    priority: bool = Query(False, description="우선 확인 리뷰만 조회 (is_priority_review=true)"),
     review_service: ReviewService = Depends(get_review_service),
     current_user: dict = Depends(get_current_user)
 ):
@@ -44,7 +44,7 @@ def get_reviews(
     period: Optional[int] = Query(None, description="조회 기간 범위 (일 수)"),
     sentiment: Optional[str] = Query(None, description="감성 구분 (positive, neutral, negative)"),
     q: Optional[str] = Query(None, description="검색어"),
-    priority: bool = Query(False, description="우선 확인 리뷰만 조회 (sentiment=negative AND rating<=2)"),
+    priority: bool = Query(False, description="우선 확인 리뷰만 조회 (is_priority_review=true)"),
     page: int = Query(1, description="페이지 번호"),
     limit: int = Query(20, description="한 페이지당 리뷰 수"),
     review_service: ReviewService = Depends(get_review_service),

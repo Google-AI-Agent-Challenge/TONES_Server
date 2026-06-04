@@ -12,9 +12,22 @@ class ReviewRepository:
         self.conn = db_conn
 
     def _parse_db_row_to_review(self, row) -> dict:
-        """SQL Query 결과 Tuple을 ReviewSchema 호환 딕셔너리로 변환 (자가 치유 복구 포함)"""
+        """
+        SQL Query 결과 Tuple을 ReviewSchema 호환 딕셔너리로 변환.
+
+        컬럼 레이아웃 (_REVIEW_SELECT_SQL 기준, 24열):
+          0-13  : 기본 리뷰 필드
+          14    : is_priority_review  ← DB 신규 컬럼
+          15    : analysis_status     ← DB 신규 컬럼
+          16-18 : score_ingredients, score_formulation, score_container
+          19-23 : p.id, brand_name, product_name, category, target_skin
+
+        폴백 쿼리(_REVIEW_SELECT_FALLBACK_SQL, 21열)는 score 컬럼(16-18)이 없고
+        product 컬럼이 16-20에 위치한다. p_idx = len(row) - 5 로 공통 처리.
+        """
+        # 제품 정보 파싱 (두 쿼리 모두 마지막 5열이 p.id ~ target_skin)
         prod_obj = None
-        if len(row) >= 19:
+        if len(row) >= 21:
             p_idx = len(row) - 5
             if row[p_idx] is not None:
                 prod_obj = {
@@ -40,13 +53,17 @@ class ReviewRepository:
             "ai_summary": row[11],
             "created_at": str(row[12]) if row[12] is not None else None,
             "review_id": str(row[13]) if row[13] is not None else None,
+            # DB 신규 컬럼 (idx 14, 15) — 두 쿼리 모두 동일 위치
+            "is_priority_review": bool(row[14]) if row[14] is not None else False,
+            "analysis_status": str(row[15]) if row[15] is not None else None,
             "products": prod_obj
         }
 
-        if len(row) >= 22:
-            review_dict["score_ingredients"] = float(row[14]) if row[14] is not None else 0.5
-            review_dict["score_formulation"] = float(row[15]) if row[15] is not None else 0.5
-            review_dict["score_container"] = float(row[16]) if row[16] is not None else 0.5
+        # score 컬럼은 전체 쿼리(24열)에만 존재 (idx 16-18)
+        if len(row) >= 24:
+            review_dict["score_ingredients"] = float(row[16]) if row[16] is not None else 0.5
+            review_dict["score_formulation"] = float(row[17]) if row[17] is not None else 0.5
+            review_dict["score_container"] = float(row[18]) if row[18] is not None else 0.5
         else:
             review_dict["score_ingredients"] = 0.5
             review_dict["score_formulation"] = 0.5
@@ -54,11 +71,18 @@ class ReviewRepository:
 
         return review_dict
 
+    # 컬럼 레이아웃 (전체 쿼리, 24열)
+    # idx 0-13 : 기본 리뷰 필드
+    # idx 14   : r.is_priority_review
+    # idx 15   : r.analysis_status
+    # idx 16-18: r.score_ingredients, r.score_formulation, r.score_container
+    # idx 19-23: p.id, b.name, p.product_name, c.name, s.name
     _REVIEW_SELECT_SQL = """
         SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating,
                r.review_date::text, r.sentiment::text, r.sentiment_score,
                COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
                r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+               r.is_priority_review, r.analysis_status,
                r.score_ingredients, r.score_formulation, r.score_container,
                p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
         FROM public.reviews r
@@ -70,30 +94,63 @@ class ReviewRepository:
         LEFT JOIN public.keywords k ON rk.keyword_id = k.id
     """
 
+    # score_* 컬럼이 DB에 없는 경우 폴백용 SELECT (21열)
+    # idx 0-13 : 기본 리뷰 필드
+    # idx 14   : r.is_priority_review
+    # idx 15   : r.analysis_status
+    # idx 16-20: p.id, b.name, p.product_name, c.name, s.name
+    # → _parse_db_row_to_review: len(row) < 24 이면 score 를 0.5 기본값으로 처리
+    _REVIEW_SELECT_FALLBACK_SQL = """
+        SELECT r.id, r.product_id, r.source::text, r.reviewer_type::text, r.review_text, r.rating,
+               r.review_date::text, r.sentiment::text, r.sentiment_score,
+               COALESCE(array_agg(k.keyword) FILTER (WHERE k.keyword IS NOT NULL), '{}') AS keywords,
+               r.issue_type::text, r.ai_summary, r.created_at, r.review_id,
+               r.is_priority_review, r.analysis_status,
+               p.id, b.name AS brand_name, p.product_name, c.name AS category, s.name AS target_skin
+        FROM public.reviews r
+        LEFT JOIN public.products p ON r.product_id = p.id
+        LEFT JOIN public.brands b ON p.brand_id = b.id
+        LEFT JOIN public.categories c ON p.category_id = c.id
+        LEFT JOIN public.skin_types s ON p.skin_type_id = s.id
+        LEFT JOIN public.review_keywords rk ON r.id = rk.review_id
+        LEFT JOIN public.keywords k ON rk.keyword_id = k.id
+    """
+
+    def _build_where(self, product_id, period_days, sentiment, q, priority, alias=""):
+        """
+        공통 WHERE 절 빌더.
+        - sentiment 조건은 ::sentiment_type enum 캐스팅 없이 ::text 비교로 처리
+          → 실제 DB 컬럼이 enum이든 text든 동일하게 동작
+        - alias: 테이블 별칭 (예: "r" → "r.sentiment"). 빈 문자열이면 그대로 사용.
+        """
+        prefix = f"{alias}." if alias else ""
+        where_clauses = []
+        params = []
+        if product_id:
+            where_clauses.append(f"{prefix}product_id = %s::uuid")
+            params.append(product_id)
+        if period_days:
+            start_date = (datetime.now().date() - timedelta(days=period_days)).isoformat()
+            where_clauses.append(f"{prefix}review_date >= %s::date")
+            params.append(start_date)
+        if priority:
+            # DB 신규 컬럼 is_priority_review 로 우선 확인 리뷰 여부 판단
+            where_clauses.append(f"{prefix}is_priority_review = true")
+        elif sentiment:
+            where_clauses.append(f"{prefix}sentiment::text = %s")
+            params.append(sentiment)
+        if q:
+            where_clauses.append(f"{prefix}review_text ILIKE %s")
+            params.append(f"%{q}%")
+        where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        return where_str, params
+
     def fetch_count(self, product_id: Optional[str] = None, period_days: Optional[int] = None,
                     sentiment: Optional[str] = None, q: Optional[str] = None, priority: bool = False) -> int:
         if self.conn is not None:
             try:
+                where_str, params = self._build_where(product_id, period_days, sentiment, q, priority)
                 cursor = self.conn.cursor()
-                where_clauses = []
-                params = []
-                if product_id:
-                    where_clauses.append("product_id = %s::uuid")
-                    params.append(product_id)
-                if period_days:
-                    start_date = (datetime.now().date() - timedelta(days=period_days)).isoformat()
-                    where_clauses.append("review_date >= %s::date")
-                    params.append(start_date)
-                if priority:
-                    where_clauses.append("sentiment = 'negative'::sentiment_type")
-                    where_clauses.append("rating <= 2")
-                elif sentiment:
-                    where_clauses.append("sentiment = %s::sentiment_type")
-                    params.append(sentiment)
-                if q:
-                    where_clauses.append("review_text ILIKE %s")
-                    params.append(f"%{q}%")
-                where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
                 cursor.execute(f"SELECT COUNT(id) FROM public.reviews {where_str}", params)
                 count = int(cursor.fetchone()[0])
                 cursor.close()
@@ -102,7 +159,9 @@ class ReviewRepository:
                 print(f"[ReviewRepository.fetch_count] DB 조회 실패, Mock 건수 반환: {e}")
         reviews = MOCK_REVIEWS
         if priority:
-            reviews = [r for r in reviews if r.get("sentiment") == "negative" and r.get("rating", 3) <= 2]
+            reviews = [r for r in reviews if r.get("is_priority_review") is True]
+        elif sentiment:
+            reviews = [r for r in reviews if r.get("sentiment") == sentiment]
         return len(reviews)
 
     def fetch_advanced(self, product_id: Optional[str] = None, period_days: Optional[int] = None,
@@ -110,40 +169,39 @@ class ReviewRepository:
                        priority: bool = False, page: int = 1, limit: int = 20) -> list:
         offset = (page - 1) * limit
         if self.conn is not None:
+            where_str, where_params = self._build_where(product_id, period_days, sentiment, q, priority, alias="r")
+            group_order = "GROUP BY r.id, p.id, b.name, c.name, s.name ORDER BY r.review_date DESC, r.created_at DESC LIMIT %s OFFSET %s"
+            full_params = where_params + [limit, offset]
+
+            # 1차 시도: score_* 컬럼 포함 전체 쿼리
             try:
                 cursor = self.conn.cursor()
-                where_clauses = []
-                params = []
-                if product_id:
-                    where_clauses.append("r.product_id = %s::uuid")
-                    params.append(product_id)
-                if period_days:
-                    start_date = (datetime.now().date() - timedelta(days=period_days)).isoformat()
-                    where_clauses.append("r.review_date >= %s::date")
-                    params.append(start_date)
-                if priority:
-                    where_clauses.append("r.sentiment = 'negative'::sentiment_type")
-                    where_clauses.append("r.rating <= 2")
-                elif sentiment:
-                    where_clauses.append("r.sentiment = %s::sentiment_type")
-                    params.append(sentiment)
-                if q:
-                    where_clauses.append("r.review_text ILIKE %s")
-                    params.append(f"%{q}%")
-                where_str = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-                sql = f"{self._REVIEW_SELECT_SQL} {where_str} GROUP BY r.id, p.id, b.name, c.name, s.name ORDER BY r.review_date DESC, r.created_at DESC LIMIT %s OFFSET %s"
-                params.extend([limit, offset])
-                cursor.execute(sql, params)
+                sql = f"{self._REVIEW_SELECT_SQL} {where_str} {group_order}"
+                cursor.execute(sql, full_params)
                 rows = cursor.fetchall()
                 cursor.close()
                 return [self._parse_db_row_to_review(r) for r in rows]
             except Exception as e:
-                print(f"[ReviewRepository.fetch_advanced] DB 조회 실패, Mock 폴백: {e}")
-        filtered = MOCK_REVIEWS
+                print(f"[ReviewRepository.fetch_advanced] 전체 쿼리 실패: {e}")
+
+            # 2차 시도: score_* 컬럼 제외 폴백 쿼리 (WHERE 조건·필터는 동일하게 유지)
+            try:
+                cursor = self.conn.cursor()
+                sql_fallback = f"{self._REVIEW_SELECT_FALLBACK_SQL} {where_str} {group_order}"
+                cursor.execute(sql_fallback, full_params)
+                rows = cursor.fetchall()
+                cursor.close()
+                print("[ReviewRepository.fetch_advanced] score 컬럼 제외 폴백 쿼리로 조회 성공")
+                return [self._parse_db_row_to_review(r) for r in rows]
+            except Exception as e2:
+                print(f"[ReviewRepository.fetch_advanced] 폴백 쿼리도 실패, Mock 데이터 반환: {e2}")
+
+        # Mock 폴백 (필터 조건 동일하게 적용)
+        filtered = list(MOCK_REVIEWS)
         if product_id:
             filtered = [r for r in filtered if r.get("product_id") == product_id]
         if priority:
-            filtered = [r for r in filtered if r.get("sentiment") == "negative" and r.get("rating", 3) <= 2]
+            filtered = [r for r in filtered if r.get("is_priority_review") is True]
         elif sentiment:
             filtered = [r for r in filtered if r.get("sentiment") == sentiment]
         if q:
