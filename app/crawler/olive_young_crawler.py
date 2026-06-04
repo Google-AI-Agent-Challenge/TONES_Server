@@ -1585,7 +1585,7 @@ def main():
         except Exception:
             rating_ok = False
 
-        if not r_key or len(content) < 300 or not rating_ok or not goods_no:
+        if not r_key or len(content) < 10 or not rating_ok or not goods_no:
             skipped_count += 1
             continue
         valid_rows.append(row)

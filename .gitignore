@@ -99,3 +99,4 @@ env/
 # Local crawler output
 review_crawler/data/*.csv
 review_crawler/test_data/*.csv
+.env
