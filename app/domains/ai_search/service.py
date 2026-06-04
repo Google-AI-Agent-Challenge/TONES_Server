@@ -55,8 +55,8 @@ class AIService:
             except Exception as e:
                 print(f"[AIService] Vertex AI Embedding API 호출 실패 (HTTP 폴백 진행): {e}")
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={settings.GEMINI_API_KEY}"
-            payload = {"model": "models/text-embedding-004", "content": {"parts": [{"text": text}]}}
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={settings.GEMINI_API_KEY}"
+            payload = {"model": "models/gemini-embedding-001", "content": {"parts": [{"text": text}]}, "outputDimensionality": 768}
             try:
                 with httpx.Client(timeout=10.0) as client:
                     response = client.post(url, json=payload)
@@ -99,7 +99,7 @@ class AIService:
                 except Exception as fb_err:
                     print(f"[AIService] Vertex AI SDK 생성 전체 실패 (HTTP 폴백 진행): {fb_err}")
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
             try:
                 with httpx.Client(timeout=20.0) as client:
                     response = client.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}]})
@@ -146,7 +146,7 @@ class AIService:
                 except Exception as e:
                     print(f"[AIService] Vertex AI ABSA 실패 ({model_name}): {e}")
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
-            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+            for model_name in ["gemini-2.5-flash", "gemini-flash-latest"]:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
                 try:
                     with httpx.Client(timeout=15.0) as client:
@@ -243,7 +243,7 @@ class AIService:
                 except Exception as e:
                     print(f"[AIService] Vertex AI Briefing 에러 ({model_name}): {e}")
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
             try:
                 with httpx.Client(timeout=20.0) as client:
                     response = client.post(url, json={"contents": [{"parts": [{"text": f"{system_instruction}\n\n{prompt}"}]}]})
