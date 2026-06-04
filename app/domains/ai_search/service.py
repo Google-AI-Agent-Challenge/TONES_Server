@@ -62,8 +62,10 @@ class AIService:
                     response = client.post(url, json=payload)
                     if response.status_code == 200:
                         return response.json()["embedding"]["values"]
+                    else:
+                        print(f"[AIService] Gemini HTTP Embedding 에러 (HTTP {response.status_code}): {response.text}")
             except Exception as http_err:
-                print(f"[AIService] Gemini HTTP Embedding API 실패: {http_err}")
+                print(f"[AIService] Gemini HTTP Embedding 예외 발생: {http_err}")
         return None
 
     def vector_search(self, request: SearchRequest) -> list[SearchResultItem]:
@@ -105,8 +107,10 @@ class AIService:
                     response = client.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}]})
                     if response.status_code == 200:
                         return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    else:
+                        print(f"[AIService] Gemini HTTP Generative 에러 (HTTP {response.status_code}): {response.text}")
             except Exception as http_err:
-                print(f"[AIService] Gemini HTTP Generative API 실패: {http_err}")
+                print(f"[AIService] Gemini HTTP Generative 예외 발생: {http_err}")
         return self._get_dummy_ai_answer(request)
 
     def _get_dummy_ai_answer(self, request: GenerateRequest) -> str:
@@ -154,8 +158,10 @@ class AIService:
                         if response.status_code == 200:
                             resp_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
                             return self._parse_json(resp_text)
-                except Exception:
-                    pass
+                        else:
+                            print(f"[AIService] Gemini HTTP ABSA 에러 ({model_name}) (HTTP {response.status_code}): {response.text}")
+                except Exception as e:
+                    print(f"[AIService] Gemini HTTP ABSA 예외 ({model_name}): {e}")
         print("[AIService] API 전체 연결 장애로 최종 로컬 룰 ABSA 엔진 구동")
         return self._local_heuristic_absa(review_text)
 
@@ -251,8 +257,10 @@ class AIService:
                         briefing = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
                         if briefing:
                             return briefing
-            except Exception:
-                pass
+                    else:
+                        print(f"[AIService] Gemini HTTP Briefing 에러 (HTTP {response.status_code}): {response.text}")
+            except Exception as http_err:
+                print(f"[AIService] Gemini HTTP Briefing 예외 발생: {http_err}")
 
         print("[AIService] API 전체 연결 장애로 로컬 트렌드 브리핑 엔진 구동")
         return self._local_trend_briefing_fallback(ing_diff, form_diff, cont_diff, rating_diff, product_name)
