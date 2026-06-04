@@ -9,8 +9,6 @@ import random
 import hashlib
 import argparse
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
@@ -1499,64 +1497,6 @@ def crawl_raw_reviews_from_page(driver, goods_no, page_info, args):
     return all_collected_reviews
 
 # ==============================================================================
-# Google Sheets
-# ==============================================================================
-def get_google_sheet_client():
-    cred_file = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-    if not cred_file:
-        print("[ERROR] GOOGLE_SERVICE_ACCOUNT_FILE 환경변수가 설정되지 않았습니다.")
-        return None
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file(cred_file, scopes=scope)
-        return gspread.authorize(creds)
-    except Exception as e:
-        print(f"[ERROR] Google Sheets 인증 실패: {e}")
-        return None
-
-def get_reviews_worksheet(client):
-    sheet_id = os.getenv("GOOGLE_SHEET_ID")
-    sheet_name = os.getenv("GOOGLE_WORKSHEET_NAME", "Sheet1")
-    if not sheet_id:
-        print("[ERROR] GOOGLE_SHEET_ID 환경변수가 설정되지 않았습니다.")
-        return None
-    try:
-        spreadsheet = client.open_by_key(sheet_id)
-        try:
-            return spreadsheet.worksheet(sheet_name)
-        except gspread.exceptions.WorksheetNotFound:
-            return spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="20")
-    except Exception as e:
-        print(f"[ERROR] 워크시트 로드 실패: {e}")
-        return None
-
-def load_existing_reviews_from_google_sheet(worksheet):
-    try:
-        records = worksheet.get_all_records()
-        if not records:
-            return pd.DataFrame()
-        df = pd.DataFrame(records)
-        print(f"[SHEET] 기존 시트 데이터 로드 성공: {len(df)}행")
-        return df
-    except Exception as e:
-        print(f"[SHEET] 기존 시트 데이터를 읽을 수 없거나 시트가 비어있습니다: {e}")
-        return pd.DataFrame()
-
-def upload_dataframe_to_google_sheet(df, worksheet):
-    if df.empty:
-        print("[SHEET] 빈 데이터프레임입니다. 업로드를 건너뜁니다.")
-        return
-    try:
-        worksheet.clear()
-        headers = df.columns.tolist()
-        df_filled = df.fillna("")
-        data_rows = df_filled.values.tolist()
-        worksheet.update([headers] + data_rows)
-        print(f"[SHEET] worksheet={worksheet.title} rows_written={len(df_filled) + 1}")
-    except Exception as e:
-        print(f"[ERROR] Google Sheets 업로드 오류: {e}")
-
-# ==============================================================================
 # Entry Point
 # ==============================================================================
 def parse_args():
@@ -1566,7 +1506,6 @@ def parse_args():
     parser.add_argument("--limit-reviews", type=int, default=200, help="조건당 수집할 최대 리뷰 수")
     parser.add_argument("--max-pages", type=int, default=20, help="조건당 최대 페이지 수")
     parser.add_argument("--headless", type=str, default="True", help="Headless 모드 사용 여부 (True/False)")
-    parser.add_argument("--skip-google-sheets", action="store_true", help="Google Sheets 업로드 생략")
     parser.add_argument("--dry-run", action="store_true", help="드라이 런 모드")
     return parser.parse_args()
 
@@ -1578,18 +1517,7 @@ def main():
     print("  방식: API 인터셉터 + Shadow DOM 추출 + 묶음 상품 정렬/필터 루프")
     print("="*60)
 
-    # [ADD] 구글 시트 연동 시 기존 적재 데이터 불러오기 (이어쓰기/중복제거 기반 마련)
-    existing_df = pd.DataFrame()
-    worksheet = None
-    if not args.skip_google_sheets and not args.dry_run:
-        client = get_google_sheet_client()
-        if client:
-            worksheet = get_reviews_worksheet(client)
-            if worksheet:
-                existing_df = load_existing_reviews_from_google_sheet(worksheet)
-                if not existing_df.empty and "review_key" in existing_df.columns:
-                    ALREADY_COLLECTED_KEYS = set(existing_df["review_key"].dropna().astype(str).tolist())
-                    print(f"[*] 구글 시트에서 기존 수집된 고유 리뷰 {len(ALREADY_COLLECTED_KEYS)}개를 불러왔습니다.")
+    ALREADY_COLLECTED_KEYS = set()
 
     driver = init_driver(args)
     all_reviews = []
@@ -1618,6 +1546,8 @@ def main():
             if idx < len(product_list) - 1:
                 print("[*] 다음 페이지 이동 전 4초 쿨다운...")
                 time.sleep(4)
+    except KeyboardInterrupt:
+        print("\n[!] 사용자에 의해 크롤링이 중단되었습니다. 현재까지 수집된 데이터를 저장합니다.")
     finally:
         print("\n[*] Selenium 드라이버 종료.")
         driver.quit()
@@ -1638,31 +1568,46 @@ def main():
             "sort_type":    r.get("sort_type", "latest")
         })
 
-    new_df = pd.DataFrame(rows)
-    
-    # [ADD] 기존 데이터와 신규 데이터 병합 후 중복 제거 저장
-    final_df = pd.DataFrame()
-    if not existing_df.empty:
-        if not new_df.empty:
-            final_df = pd.concat([existing_df, new_df], ignore_index=True)
-        else:
-            final_df = existing_df
-    else:
-        final_df = new_df
+    df = pd.DataFrame(rows)
 
-    if not final_df.empty:
-        final_df = final_df.drop_duplicates(subset=["review_key"], keep="first")
-        print(f"\n[*] 중복 제거 후 최종적으로 {len(final_df)}개 고유 리뷰가 데이터셋에 존재합니다.")
-        
-        if not args.skip_google_sheets and not args.dry_run:
-            if worksheet:
-                upload_dataframe_to_google_sheet(final_df, worksheet)
-            else:
-                print("[!] 구글 시트 워크시트를 찾지 못해 업로드를 건너뜁니다.")
-        else:
-            print("[*] Google Sheets 업로드 모드가 비활성화되어 로컬에 캐시합니다 (메모리만 유지).")
-    else:
-        print("[!] 수집된 리뷰가 전혀 없습니다.")
+    # 데이터 검증
+    valid_rows = []
+    skipped_count = 0
+    for idx, row in df.iterrows():
+        r_key = str(row.get("review_key", "")).strip() if pd.notna(row.get("review_key")) else ""
+        content = str(row.get("content", "")).strip() if pd.notna(row.get("content")) else ""
+        rating = row.get("rating")
+        goods_no = str(row.get("goods_no", "")).strip() if pd.notna(row.get("goods_no")) else ""
+
+        try:
+            rating_val = int(rating)
+            rating_ok = 1 <= rating_val <= 5
+        except Exception:
+            rating_ok = False
+
+        if not r_key or len(content) < 300 or not rating_ok or not goods_no:
+            skipped_count += 1
+            continue
+        valid_rows.append(row)
+
+    df = pd.DataFrame(valid_rows) if valid_rows else pd.DataFrame(columns=df.columns)
+    print(f"[VALIDATE] valid={len(df)} skipped={skipped_count}")
+
+    # 중복 제거
+    df = df.drop_duplicates(subset=["review_key"], keep="first")
+
+    # CSV 저장
+    csv_path = os.getenv("REVIEW_CSV_PATH", "review_crawler/data/olive_young_reviews.csv")
+    try:
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        df.to_csv(
+            csv_path,
+            index=False,
+            encoding="utf-8-sig"
+        )
+        print(f"[CSV] path={csv_path} rows_written={len(df)}")
+    except Exception as e:
+        print(f"[ERROR] type=csv_save_error reason={e}")
 
     print("\n" + "="*60)
     print("  모든 작업 완료!")
