@@ -18,6 +18,8 @@ class ReviewSchema(BaseModel):
     ai_summary: Optional[str] = None
     created_at: Optional[str] = None
     review_id: Optional[str] = None
+    is_priority_review: Optional[bool] = None   # DB 신규 컬럼: 우선 확인 리뷰 여부
+    analysis_status: Optional[str] = None       # DB 신규 컬럼: 분석 처리 상태
     products: Optional[ProductSchema] = None
 
     model_config = {"from_attributes": True}

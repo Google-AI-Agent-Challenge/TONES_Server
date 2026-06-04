@@ -173,14 +173,7 @@ class DashboardService:
         neg_rate_last = round(neg_count_last / last_agg["total_reviews"] * 100, 1) if last_agg["total_reviews"] > 0 else 0.0
         neg_diff = round(neg_rate_this - neg_rate_last, 1)
 
-        urgent_reviews = []
-        for r in reviews_this:
-            is_priority = r.get("is_priority_review")
-            if is_priority is not None:
-                if is_priority:
-                    urgent_reviews.append(r)
-            elif r.get("sentiment") == "negative" and r.get("rating", 3) <= 2:
-                urgent_reviews.append(r)
+        urgent_reviews = [r for r in reviews_this if r.get("is_priority_review") is True]
         urgent_summary = [{"id": r.get("id"), "summary": (r.get("ai_summary", "") or "")[:60] + "...", "rating": r.get("rating")} for r in urgent_reviews[:3]]
 
         result = {
