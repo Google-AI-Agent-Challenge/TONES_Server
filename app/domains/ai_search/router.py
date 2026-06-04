@@ -47,12 +47,18 @@ def generate_response(
 def ai_chat_assistant(
     payload: AIChatRequest,
     ai_service: AIService = Depends(get_ai_service),
+    dashboard_service: DashboardService = Depends(get_dashboard_service),
     current_user: dict = Depends(get_current_user)
 ) -> Any:
     """리뷰 분석 - AI 어시스턴트 RAG 챗봇 API (인증 필요)"""
     search_filter = {}
+    product_name = "전체 제품"
     if payload.product_id and payload.product_id != "all":
         search_filter["product_id"] = payload.product_id
+        fetched_name = dashboard_service.repo.fetch_product_name(payload.product_id)
+        if fetched_name:
+            product_name = fetched_name
+
     search_req = SearchRequest(
         query=payload.message,
         top_k=4,
@@ -60,6 +66,9 @@ def ai_chat_assistant(
     )
     search_results = ai_service.vector_search(search_req)
     context_items = []
+    
+    context_items.append(f"[대상 제품명]: {product_name}")
+    
     referenced_reviews = []
     for item in search_results:
         metadata = item.metadata

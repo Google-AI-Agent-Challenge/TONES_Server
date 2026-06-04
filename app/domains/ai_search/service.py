@@ -94,14 +94,14 @@ class AIService:
         full_prompt = f"{context_str}질문: {request.prompt}\n\n위의 질문에 대해 주어진 컨텍스트에 기반하여 정확하고 친절하게 한국어로 답변해 주세요."
         if _init_vertex_ai():
             try:
-                model = GenerativeModel("gemini-2.0-flash")
+                model = GenerativeModel("gemini-3.5-flash")
                 response = model.generate_content(full_prompt)
-                print("[AIService] Vertex AI Gemini 2.0-flash 답변 생성 성공")
+                print("[AIService] Vertex AI Gemini 3.5-flash 답변 생성 성공")
                 return response.text
             except Exception as e:
-                print(f"[AIService] Vertex AI Gemini 2.0-flash 실패, 1.5-flash 폴백 실행: {e}")
+                print(f"[AIService] Vertex AI Gemini 3.5-flash 실패, 2.5-flash 폴백 실행: {e}")
                 try:
-                    model_fb = GenerativeModel("gemini-1.5-flash")
+                    model_fb = GenerativeModel("gemini-2.5-flash")
                     return model_fb.generate_content(full_prompt).text
                 except Exception as fb_err:
                     print(f"[AIService] Vertex AI SDK 생성 전체 실패 (HTTP 폴백 진행): {fb_err}")
@@ -143,7 +143,7 @@ class AIService:
         prompt = f"분석할 고객 리뷰:\n\"\"\"\n{review_text}\n\"\"\""
         full_prompt = f"{system_instruction}\n\n{prompt}"
         if _init_vertex_ai():
-            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+            for model_name in ["gemini-3.5-flash", "gemini-2.5-flash"]:
                 try:
                     model = GenerativeModel(model_name)
                     response = model.generate_content(full_prompt)
@@ -244,7 +244,7 @@ class AIService:
         )
 
         if _init_vertex_ai():
-            for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+            for model_name in ["gemini-3.5-flash", "gemini-2.5-flash"]:
                 try:
                     model = GenerativeModel(model_name)
                     briefing = model.generate_content(f"{system_instruction}\n\n{prompt}").text.strip()

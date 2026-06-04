@@ -15,7 +15,7 @@
 | **비동기 WAS** | **Uvicorn standard 0.28.0+** | 고성능 비동기 ASGI 서버 구동 및 실시간 이벤트 동시성 제어 |
 | **데이터 레이어** | **GCP Cloud SQL & pgvector** | `pg8000` 비동기 직접 드라이버 및 `pgvector 0.2.0+` 패키지를 도입하여 PostgreSQL 내 코사인 유사도 연산 및 시맨틱 RAG 통합 검색 구현 (구형 Pinecone 벡터 DB 의존성 전면 제거) |
 | **AI 및 분석** | **Google Gemini Embedding** | `text-embedding-004` 모델을 활용하여 768차원 고차원 의미 벡터 생성 |
-| **AI 및 생성** | **Google Gemini Generative** | `gemini-2.0-flash` 모델 탑재 및 실시간 RAG 기반 답변 생성 |
+| **AI 및 생성** | **Google Gemini Generative** | `gemini-3.5-flash` 모델 탑재 및 실시간 RAG 기반 답변 생성 |
 | **장애 복원력** | **3단계 강건성 복원력 엔진** | 1차 Vertex AI SDK 호출 -> 실패 시 2차 Generative Language HTTP REST API 폴백 -> 최종 API 마비 시 3차 Local Offline Heuristic 엔진으로의 3중 폴백 보장 |
 | **텍스트 인텔리전스** | **ABSA 분석 엔진** | 속성 기반 감성 분석(Aspect-Based Sentiment Analysis) 엔진 탑재로 성분/피부, 제형/발림성, 용기/디자인 스코어링 강제 |
 | **통계 복원력** | **Heuristic 점수 복원 엔진** | 통계 집계 시 감성 스코어 컬럼이 누락된 구형 레코드 대상 정규식 역추출 및 평점/키워드 가중치 기반 휴리스틱 추정으로 통계 왜곡 방지 |
@@ -43,7 +43,7 @@
 
 ### 3. RAG(Retrieval-Augmented Generation) 및 Gemini 멀티 모델 생성 엔진
 - **동적 프레임워크 RAG**: 데이터베이스 검색 컨텍스트(Context)와 질문 프롬프트를 동적으로 조립하여 환각 현상(Hallucination)을 제어하는 RAG 아키텍처 기반 생성 엔진을 구축하였습니다.
-- **Graceful Degradation (유연한 성능 저하)**: 최신 초고속 모델인 `gemini-2.0-flash`를 기본 엔진으로 설정하고, API 할당량 초과(Quota Limit) 또는 장애 발생 시 `gemini-1.5-flash` 모델로 자동 하향 다운그레이드 처리하여 사용자 서비스 마비를 방지합니다.
+- **Graceful Degradation (유연한 성능 저하)**: 최신 초고속 모델인 `gemini-3.5-flash`를 기본 엔진으로 설정하고, API 할당량 초과(Quota Limit) 또는 장애 발생 시 `gemini-2.5-flash` 모델로 자동 하향 다운그레이드 처리하여 사용자 서비스 마비를 방지합니다.
 
 ### 4. 속성 기반 감성 분석(ABSA) 및 다차원 평점 분석 엔진
 - **텍스트 인텔리전스 고도화**: 단순한 긍정/부정 판단을 넘어 수집된 리뷰 텍스트를 정밀하게 분석하기 위해 속성 기반 감성 분석(ABSA) 엔진을 탑재하였습니다.

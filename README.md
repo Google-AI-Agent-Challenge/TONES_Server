@@ -41,7 +41,7 @@ B2B 특화 AI 리뷰 감성 분석 대시보드입니다.<br>
 | **데이터베이스** | GCP Cloud SQL (PostgreSQL + pgvector 확장) |
 | **DB 드라이버** | pg8000 — 순수 파이썬, C 컴파일러 불필요 |
 | **AI / 임베딩** | Google Gemini `text-embedding-004` (768차원), Vertex AI SDK |
-| **AI / 생성** | Google Gemini `gemini-2.0-flash` (RAG 답변·ABSA·브리핑) |
+| **AI / 생성** | Google Gemini `gemini-3.5-flash` (RAG 답변·ABSA·브리핑) |
 | **인증** | PyJWT 2.8.0+ (순수 파이썬 JWT, 컴파일 에러 없음) |
 | **데이터 검증** | Pydantic v2 / Pydantic Settings v2 |
 | **테스트** | Pytest 8.0.0+, HTTPX |
