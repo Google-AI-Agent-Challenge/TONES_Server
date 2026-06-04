@@ -33,7 +33,7 @@ steps:
       '--max-instances', '5',
       '--cpu', '1',
       '--memory', '2Gi',
-      '--add-cloudsql-instances', 'knudc-zintn11:us-central1:tones-db',
+      '--add-cloudsql-instances', '$_CLOUD_SQL_INSTANCE',
     ]
 
 images:
