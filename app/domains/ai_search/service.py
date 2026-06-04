@@ -58,7 +58,7 @@ class AIService:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={settings.GEMINI_API_KEY}"
             payload = {"model": "models/gemini-embedding-001", "content": {"parts": [{"text": text}]}, "outputDimensionality": 768}
             try:
-                with httpx.Client(timeout=10.0) as client:
+                with httpx.Client(timeout=20.0) as client:
                     response = client.post(url, json=payload)
                     if response.status_code == 200:
                         return response.json()["embedding"]["values"]
@@ -103,7 +103,7 @@ class AIService:
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
             try:
-                with httpx.Client(timeout=20.0) as client:
+                with httpx.Client(timeout=60.0) as client:
                     response = client.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}]})
                     if response.status_code == 200:
                         return response.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -153,7 +153,7 @@ class AIService:
             for model_name in ["gemini-2.5-flash", "gemini-flash-latest"]:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
                 try:
-                    with httpx.Client(timeout=15.0) as client:
+                    with httpx.Client(timeout=30.0) as client:
                         response = client.post(url, json={"contents": [{"parts": [{"text": full_prompt}]}]})
                         if response.status_code == 200:
                             resp_text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -251,7 +251,7 @@ class AIService:
         if settings.GEMINI_API_KEY and not settings.GEMINI_API_KEY.startswith("your-"):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
             try:
-                with httpx.Client(timeout=20.0) as client:
+                with httpx.Client(timeout=60.0) as client:
                     response = client.post(url, json={"contents": [{"parts": [{"text": f"{system_instruction}\n\n{prompt}"}]}]})
                     if response.status_code == 200:
                         briefing = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
