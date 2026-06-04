@@ -69,7 +69,9 @@
 | :--- | :--- | :--- | :---: | :--- |
 | **Layout** | `GET` | [/api/layout](#get-apilayout) | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 조회 |
 | | `PUT` | [/api/layout](#put-apilayout--post-apilayout) | 🔑 | 사용자별 대시보드 고정(핀) 위젯 레이아웃 영속 저장/수정 |
-| **AI Assistant**| `POST` | [/api/ai/chat](#post-apiaichat) | 🔑 | pgvector 시맨틱 컨텍스트 매칭 결합 RAG 챗봇 어시스턴트 대화 |
+| **AI Assistant**| `POST` | [/api/ai/search](#post-apiaisearch) | 🔑 | pgvector 코사인 유사도 기반 벡터 DB 시맨틱 유사 리뷰 검색 |
+| | `POST` | [/api/ai/generate](#post-apiaigenerate) | 🔑 | 컨텍스트 기반 Gemini AI 단독 답변 생성 |
+| | `POST` | [/api/ai/chat](#post-apiaichat) | 🔑 | pgvector 시맨틱 컨텍스트 매칭 결합 RAG 챗봇 어시스턴트 대화 |
 | | `GET` | [/api/ai/insight-briefing](#get-apiaiinsight-briefing) | 🔑 | 리뷰 분석용 실시간 AI 핵심 VOC 요약 브리핑 및 현황 조회 |
 | **Admin** | `GET` | [/api/admin/users](#get-apiadminusers) | 🔑(S) | 제어센터 - 전체 관리자 계정 목록 조회 (슈퍼 관리자 권한 필수) |
 | | `POST` | [/api/admin/users](#post-apiadminusers) | 🔑(S) | 제어센터 - B2B 신규 관리자 계정 생성 (슈퍼 관리자 권한 필수) |
@@ -473,6 +475,11 @@
 #### `POST /api/reviews/export`
 - **설명**: 현재 쿼리 및 필터에 정합하는 모든 리뷰 데이터를 정형화하여 BOM 헤더가 포함된 엑셀/Windows OS 완벽 호환 `utf-8-sig` 바이트 CSV 파일 다운로드 파일 스트림을 반환한다.
 - **인증**: 🔑
+- **Query Parameters**:
+  - `product` (string, optional): 제품 UUID
+  - `period` (integer, optional): 분석 기간 (일)
+  - `sentiment` (string, optional): 감성 구분 (`positive`, `neutral`, `negative`)
+  - `q` (string, optional): 검색어 (리뷰 본문 LIKE 검색)
 - **Response**: `text/csv` 바이너리 스트림 파일 전송 (다운로드 파일명: `tones_reviews_export.csv`)
 
 #### `POST /api/reviews/bulk`
@@ -496,10 +503,11 @@
 - **Response** (201 Created):
   ```json
   {
-    "success": true,
-    "message": "1건의 리뷰 처리가 정상 완료되었습니다.",
-    "processed_count": 1,
-    "saved_count": 1
+    "status": "completed",
+    "total_reviews": 1,
+    "success_count": 1,
+    "failure_count": 0,
+    "processed_ids": ["row-uuid-abc123"]
   }
   ```
 
