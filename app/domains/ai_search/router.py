@@ -51,12 +51,12 @@ def ai_chat_assistant(
 ) -> Any:
     """리뷰 분석 - AI 어시스턴트 RAG 챗봇 API (인증 필요)"""
     search_filter = {}
-    if payload.product_id:
+    if payload.product_id and payload.product_id != "all":
         search_filter["product_id"] = payload.product_id
     search_req = SearchRequest(
         query=payload.message,
         top_k=4,
-        filter=search_filter if payload.product_id else None
+        filter=search_filter if search_filter else None
     )
     search_results = ai_service.vector_search(search_req)
     context_items = []

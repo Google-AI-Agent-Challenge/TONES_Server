@@ -79,7 +79,12 @@ class AIService:
             SearchResultItem(
                 id=f"doc_{i}",
                 score=0.98 - (i * 0.05),
-                metadata={"title": f"Document {i}", "content": f"이것은 '{request.query}'에 대한 로컬 테스트용 {i}번째 관련 더미 문서 검색 결과입니다."}
+                metadata={
+                    "review_text": f"이것은 '{request.query}'에 대한 로컬 테스트용 {i}번째 관련 더미 리뷰 내용입니다.",
+                    "rating": 5 - i if i < 3 else 3,
+                    "sentiment": "positive" if i < 2 else "neutral",
+                    "ai_summary": f"더미 리뷰 {i} 요약"
+                }
             )
             for i in range(request.top_k)
         ]

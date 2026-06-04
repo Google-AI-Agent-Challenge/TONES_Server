@@ -34,6 +34,7 @@ steps:
       '--cpu', '1',
       '--memory', '2Gi',
       '--add-cloudsql-instances', 'knudc-zintn11:us-central1:tones-db',
+      '--set-env-vars', 'GEMINI_API_KEY=AIzaSyCz4y7BE36QmdD68Rxoep0GuWVJ80AfDuA',
     ]
 
 images:
